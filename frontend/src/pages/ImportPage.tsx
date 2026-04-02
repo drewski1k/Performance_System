@@ -117,6 +117,7 @@ export default function ImportPage() {
       setImportResult(resp.data);
       setStep("done");
       queryClient.invalidateQueries({ queryKey: ["scoring-periods"] });
+      queryClient.invalidateQueries({ queryKey: ["scorecard-templates"] });
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || "Import failed");
       setStep("preview");
