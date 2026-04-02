@@ -888,9 +888,14 @@ export default function ScorecardConfigPage() {
                                         }}
                                         className={cn(
                                           "text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring",
-                                          m.direction === "higher_better" ? "text-emerald-700" : "text-amber-700"
+                                          m.direction === "higher_better" ? "text-emerald-700" :
+                                          m.direction === "lower_better" ? "text-amber-700" :
+                                          "text-red-500"
                                         )}
                                       >
+                                        {(m.direction === "undefined" || !m.direction) && (
+                                          <option value="undefined">-- Select --</option>
+                                        )}
                                         <option value="higher_better">Higher ▲</option>
                                         <option value="lower_better">Lower ▼</option>
                                       </select>

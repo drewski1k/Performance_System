@@ -1043,7 +1043,7 @@ def execute_unified_import(
                 description=f"Auto-imported metric: {display_name}",
                 channel=None,  # Undefined — user configures later
                 unit="ratio",
-                direction="higher_better",
+                direction="undefined",
                 is_default=False,
                 is_custom=False,
             )
@@ -1057,7 +1057,7 @@ def execute_unified_import(
             metric_id=metric_def.id,
             weight=Decimal("0"),
             include_in_score=False,
-            show_on_scorecard=True,
+            show_on_scorecard=False,
             min_threshold=0,
             threshold_basis="",
             grade_mode="dynamic",
