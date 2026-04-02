@@ -532,7 +532,7 @@ export default function ScorecardConfigPage() {
         {/* ── Metrics tab ─────────────────────────────────────────────────── */}
         {activeTab === "metrics" && (
           <div>
-            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+            <div className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b border-border -mx-6 px-6 py-3 mb-4 flex items-center justify-between flex-wrap gap-3">
               <div>
                 <h3 className="text-sm font-semibold">Metric Configuration</h3>
                 <p className="text-sm text-muted-foreground mt-0.5">
