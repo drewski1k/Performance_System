@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -7,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import ScorecardTemplate, ScoringPeriod
+from app.models import Company, ScorecardTemplate, ScoringPeriod
 from app.services.import_service import (
     detect_data_type,
     execute_hc_import,
@@ -187,9 +188,9 @@ def _execute_import(
         stats = execute_hc_import(db, records, company_name)
         return {"data_type": "hc_data", "status": "success", **stats}
 
-    # Performance data types need template + period
+    # Performance data types need template + period — auto-create if missing
     if not template_id or not period_id:
-        raise HTTPException(400, "template_id and period_id required for performance data import")
+        template_id, period_id = _ensure_template_and_period(db, company_name, cycle)
 
     if data_type == "combined":
         records = process_combined_data(df, cycle=cycle)
@@ -201,4 +202,61 @@ def _execute_import(
         raise HTTPException(400, f"Unknown data type: {data_type}")
 
     stats = execute_performance_import(db, records, template_id, period_id)
+
+    # Auto-run scoring after import
+    scored = calculate_scores(db, period_id, template_id)
+    stats["agents_scored"] = scored
+
     return {"data_type": data_type, "status": "success", **stats}
+
+
+def _ensure_template_and_period(
+    db: Session, company_name: str, cycle: int | None
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """Find or create a default scorecard template and scoring period."""
+    from datetime import date, timedelta
+
+    # Find company
+    company = db.scalars(select(Company).limit(1)).first()
+    if not company:
+        company = Company(name=company_name)
+        db.add(company)
+        db.flush()
+
+    # Find or create template
+    template = db.scalars(
+        select(ScorecardTemplate).where(ScorecardTemplate.company_id == company.id).limit(1)
+    ).first()
+    if not template:
+        template = ScorecardTemplate(
+            company_id=company.id,
+            name=f"{company.name} Scorecard",
+            channel_weight=Decimal("0"),
+            non_channel_weight=Decimal("100"),
+            use_dynamic_thresholds=True,
+            outlier_method="iqr",
+            iqr_multiplier=Decimal("1.5"),
+        )
+        db.add(template)
+        db.flush()
+
+    # Find or create period
+    label = f"Cycle {cycle}" if cycle else "Current Period"
+    period = db.scalars(
+        select(ScoringPeriod)
+        .where(ScoringPeriod.company_id == company.id, ScoringPeriod.label == label)
+        .limit(1)
+    ).first()
+    if not period:
+        today = date.today()
+        period = ScoringPeriod(
+            company_id=company.id,
+            label=label,
+            period_type="cycle",
+            start_date=today - timedelta(days=14),
+            end_date=today,
+        )
+        db.add(period)
+        db.flush()
+
+    return template.id, period.id

@@ -45,6 +45,7 @@ interface ImportResult {
   sites_created?: number;
   supervisors_created?: number;
   agents_not_found?: number;
+  agents_scored?: number;
   metrics_not_found?: string[];
 }
 
@@ -142,7 +143,7 @@ export default function ImportPage() {
         if (dataType !== "auto" && preview?.data_type)
           params.set("data_type", preview.data_type);
         if (cycle) params.set("cycle", cycle);
-        // TODO: template_id and period_id from context/selection
+        // template_id and period_id auto-created by backend if needed
 
         const resp = await api.post(
           `/performance/import/upload?${params.toString()}`,
@@ -155,7 +156,7 @@ export default function ImportPage() {
           text: pasteText,
           data_type: preview?.data_type || (dataType === "auto" ? null : dataType),
           cycle: cycle ? parseInt(cycle) : null,
-          // TODO: template_id and period_id from context/selection
+          // template_id and period_id auto-created by backend if needed
         });
         result = resp.data;
       }
@@ -374,29 +375,36 @@ export default function ImportPage() {
       <div className="bg-card rounded-xl border border-border p-5 shadow-sm">
         <div className="flex items-center gap-2 mb-3">
           <Info className="h-4 w-4 text-muted-foreground" />
-          <h3 className="text-sm font-semibold">Supported Data Sources</h3>
+          <h3 className="text-sm font-semibold">How to Import (Recommended Order)</h3>
+        </div>
+        <div className="p-3 mb-3 rounded-lg bg-primary/5 border border-primary/20">
+          <ol className="text-sm space-y-1.5 list-decimal list-inside text-muted-foreground">
+            <li><span className="font-medium text-foreground">HC Data first</span> — creates agents, supervisors, sites</li>
+            <li><span className="font-medium text-foreground">Combined Data second</span> — imports metrics and auto-runs scoring</li>
+          </ol>
+          <p className="text-xs text-muted-foreground mt-2">The system auto-detects which sheet you're uploading. Just select your Excel file and it will figure out the rest.</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {[
             {
-              name: "Combined Data",
-              desc: "All-in-one sheet with metrics, QA, and durations per agent per cycle",
+              name: "1. HC Data (Hierarchy)",
+              desc: "Upload this first — sets up the org structure",
+              cols: "Associate Name, Job Title, BPO, Site, Supervisor",
+            },
+            {
+              name: "2. Combined Data",
+              desc: "Upload second — all metrics per agent per cycle, auto-scores",
               cols: "Person Name, Cycle, Logged in Time, Phone Calls, QA Score, ...",
             },
             {
               name: "Agent Summary Glance Report",
-              desc: "Raw export from Gladly with channel-level available times",
+              desc: "Alternative: raw Gladly export with channel-level times",
               cols: "Name or Email, Logged in Time in seconds, Contact Accepted - Phone Call, ...",
             },
             {
               name: "QA Data",
-              desc: "Quality evaluation scores imported separately",
+              desc: "Alternative: quality evaluation scores imported separately",
               cols: "Associate Name, Total Evaluations, Average Quality Score %",
-            },
-            {
-              name: "HC Data (Hierarchy)",
-              desc: "Sets up the org structure: agents, supervisors, sites",
-              cols: "Associate Name, Job Title, BPO, Site, Supervisor",
             },
           ].map((src) => (
             <div key={src.name} className="p-3 rounded-lg bg-muted/40">
@@ -602,6 +610,9 @@ function ImportResultPanel({
           <>
             <StatBadge label="Records Created" value={result.records_created || 0} />
             <StatBadge label="Records Updated" value={result.records_updated || 0} />
+            {result.agents_scored ? (
+              <StatBadge label="Agents Scored" value={result.agents_scored} />
+            ) : null}
             {result.agents_not_found ? (
               <StatBadge label="Agents Not Found" value={result.agents_not_found} warn />
             ) : null}
