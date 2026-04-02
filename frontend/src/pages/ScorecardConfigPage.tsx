@@ -479,18 +479,29 @@ export default function ScorecardConfigPage() {
                           />
                         </td>
 
-                        {/* Direction (read-only badge) */}
+                        {/* Direction (editable dropdown) */}
                         <td className="py-2.5 pr-4">
-                          <span
+                          <select
+                            value={m.direction}
+                            onChange={(e) => {
+                              updateMetricField(i, "direction", e.target.value);
+                              // Also patch the metric definition on the backend
+                              api.patch(`/metrics/definitions/${m.metric_id}`, {
+                                direction: e.target.value,
+                              }).then(() => {
+                                queryClient.invalidateQueries({ queryKey: ["scorecard-templates"] });
+                              });
+                            }}
                             className={cn(
-                              "text-xs px-2 py-0.5 rounded",
-                              m.direction === "higher_is_better"
-                                ? "bg-emerald-50 text-emerald-700"
-                                : "bg-amber-50 text-amber-700"
+                              "text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring",
+                              m.direction === "higher_better"
+                                ? "text-emerald-700"
+                                : "text-amber-700"
                             )}
                           >
-                            {m.direction === "higher_is_better" ? "Higher" : "Lower"}
-                          </span>
+                            <option value="higher_better">Higher ▲</option>
+                            <option value="lower_better">Lower ▼</option>
+                          </select>
                         </td>
 
                         {/* Include in Score toggle */}

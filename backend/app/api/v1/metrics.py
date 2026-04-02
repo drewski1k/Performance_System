@@ -46,3 +46,25 @@ def update_metric(metric_id: uuid.UUID, data: MetricDefinitionCreate, db: Sessio
     db.commit()
     db.refresh(metric)
     return metric
+
+
+from pydantic import BaseModel
+from typing import Optional
+
+class MetricDefinitionPatch(BaseModel):
+    direction: Optional[str] = None
+    name: Optional[str] = None
+    channel: Optional[str] = None
+    unit: Optional[str] = None
+
+
+@router.patch("/definitions/{metric_id}", response_model=MetricDefinitionOut)
+def patch_metric(metric_id: uuid.UUID, data: MetricDefinitionPatch, db: Session = Depends(get_db)):
+    metric = db.get(MetricDefinition, metric_id)
+    if not metric:
+        raise HTTPException(404, "Metric not found")
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(metric, field, value)
+    db.commit()
+    db.refresh(metric)
+    return metric
