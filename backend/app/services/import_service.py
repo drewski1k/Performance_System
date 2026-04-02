@@ -316,17 +316,27 @@ def process_hc_data(df: pd.DataFrame) -> list[dict]:
     results = []
     for _, row in df.iterrows():
         name = str(row.get("Associate Name", "")).strip()
-        if not name:
+        if not name or name in ("nan", "NaT", "") or name.startswith("Applied"):
             continue
+        # Skip rows that look like filter metadata or bad data
+        if len(name) > 100 or "\n" in name:
+            continue
+
+        site = str(row.get("Site", "")).strip()
+        bpo = str(row.get("BPO", "")).strip()
+        if site in ("nan", "NaT"):
+            site = ""
+        if bpo in ("nan", "NaT"):
+            bpo = ""
 
         results.append({
             "name": name,
             "job_title": str(row.get("Job Title", "")).strip(),
-            "bpo": str(row.get("BPO", "")).strip(),
-            "site": str(row.get("Site", "")).strip(),
+            "bpo": bpo,
+            "site": site or "Unknown",
             "supervisor": str(row.get("Supervisor", "")).strip(),
             "assoc_type": str(row.get("Associate Type", row.get("Assoc Type", ""))).strip(),
-            "hire_date": row.get("Hire Date"),
+            "hire_date": row.get("Hire Date") if pd.notna(row.get("Hire Date")) else None,
             "email": str(row.get("Email", "")).strip() if pd.notna(row.get("Email")) else None,
         })
 
@@ -484,17 +494,21 @@ def execute_hc_import(db: Session, records: list[dict], company_name: str = "Def
             sup_parts = sup_name.split(" ", 1)
             first = sup_parts[0]
             last = sup_parts[1] if len(sup_parts) > 1 else ""
-            sup = db.scalar(
-                select(Supervisor).where(
-                    Supervisor.site_id == site.id,
-                    Supervisor.first_name == first,
-                    Supervisor.last_name == last,
+            emp_id = f"sup_{sup_name.lower().replace(' ', '_')}"
+            # Check by employee_id first (globally unique), then by name+site
+            sup = db.scalar(select(Supervisor).where(Supervisor.employee_id == emp_id))
+            if not sup:
+                sup = db.scalar(
+                    select(Supervisor).where(
+                        Supervisor.site_id == site.id,
+                        Supervisor.first_name == first,
+                        Supervisor.last_name == last,
+                    )
                 )
-            )
             if not sup:
                 sup = Supervisor(
                     site_id=site.id,
-                    employee_id=f"sup_{sup_name.lower().replace(' ', '_')}",
+                    employee_id=emp_id,
                     first_name=first, last_name=last,
                 )
                 db.add(sup)
@@ -560,6 +574,7 @@ def execute_performance_import(
             sm_lookup[metric_def.key] = sm.id
 
     stats = {"records_created": 0, "records_updated": 0, "agents_not_found": 0, "metrics_not_found": set()}
+    seen: set[tuple] = set()  # Track (agent_id, sm_id) to avoid duplicates
 
     for r in records:
         agent_id = agents.get(r["name"]) or agents.get(f"agent_{r['name'].lower().replace(' ', '_')}")
@@ -572,6 +587,12 @@ def execute_performance_import(
             if not sm_id:
                 stats["metrics_not_found"].add(metric_key)
                 continue
+
+            # Skip duplicates within the same batch
+            key = (agent_id, sm_id)
+            if key in seen:
+                continue
+            seen.add(key)
 
             try:
                 dec_value = Decimal(str(round(value, 6)))

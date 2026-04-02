@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { PeriodProvider } from "@/hooks/usePeriod";
 import AppShell from "@/components/layout/AppShell";
 import DashboardPage from "@/pages/DashboardPage";
 import HierarchyPage from "@/pages/HierarchyPage";
@@ -18,19 +19,21 @@ const queryClient = new QueryClient({
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Routes>
-          <Route element={<AppShell />}>
-            <Route index element={<DashboardPage />} />
-            <Route path="hierarchy" element={<HierarchyPage />} />
-            <Route path="scorecard-config" element={<ScorecardConfigPage />} />
-            <Route path="import" element={<ImportPage />} />
-            <Route path="reports" element={<ReportsPage />} />
-            <Route path="pfp" element={<PfpPage />} />
-            <Route path="agents" element={<AgentsPage />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+      <PeriodProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route index element={<DashboardPage />} />
+              <Route path="hierarchy" element={<HierarchyPage />} />
+              <Route path="scorecard-config" element={<ScorecardConfigPage />} />
+              <Route path="import" element={<ImportPage />} />
+              <Route path="reports" element={<ReportsPage />} />
+              <Route path="pfp" element={<PfpPage />} />
+              <Route path="agents" element={<AgentsPage />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </PeriodProvider>
     </QueryClientProvider>
   );
 }

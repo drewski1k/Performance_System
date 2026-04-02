@@ -434,8 +434,6 @@ function PreviewPanel({
   onImport: () => void;
   onBack: () => void;
 }) {
-  const isHC = preview.data_type === "hc_data";
-
   return (
     <div className="space-y-4">
       {/* Summary cards */}

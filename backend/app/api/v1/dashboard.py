@@ -1,11 +1,12 @@
 import uuid
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Agent, AgentPeriodScore, Supervisor
+from app.models import Agent, AgentPeriodScore, ScorecardTemplate, ScoringPeriod, Supervisor
 from app.services.rollup import company_rollup, site_rollup, supervisor_rollup
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -146,4 +147,124 @@ def get_agent_scorecard(
         },
         "summary": summary,
         "metrics": metrics,
+    }
+
+
+@router.get("/summary")
+def get_summary(
+    period_id: Optional[uuid.UUID] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Return an overview for the most recent (or specified) scoring period."""
+
+    # --- resolve period ---
+    if period_id:
+        period = db.get(ScoringPeriod, period_id)
+        if not period:
+            raise HTTPException(404, "Scoring period not found")
+    else:
+        period = db.scalar(
+            select(ScoringPeriod).order_by(ScoringPeriod.start_date.desc())
+        )
+        if not period:
+            raise HTTPException(404, "No scoring periods exist")
+
+    # --- all agent scores for this period ---
+    scores = db.scalars(
+        select(AgentPeriodScore)
+        .where(AgentPeriodScore.scoring_period_id == period.id)
+        .order_by(AgentPeriodScore.rank.asc().nullslast())
+    ).all()
+
+    # --- KPI aggregates ---
+    graded = [s for s in scores if s.final_score is not None]
+    avg_score = (
+        float(sum(s.final_score for s in graded) / len(graded))
+        if graded
+        else None
+    )
+    agents_graded = len(graded)
+    a_count = sum(1 for s in graded if s.final_grade == "A")
+    a_grade_rate = round(a_count / agents_graded * 100, 1) if agents_graded else 0
+    total_pfp_payout = float(
+        sum(s.pfp_payout for s in scores if s.pfp_payout is not None)
+    )
+    total_money_left = float(
+        sum(s.pfp_money_left for s in scores if s.pfp_money_left is not None)
+    )
+
+    # --- grade distribution ---
+    grade_distribution = {"A": 0, "B": 0, "C": 0, "D": 0, "F": 0}
+    for s in graded:
+        if s.final_grade in grade_distribution:
+            grade_distribution[s.final_grade] += 1
+
+    # --- top 10 agents by rank ---
+    top_agents = []
+    for s in scores[:10]:
+        agent = db.get(Agent, s.agent_id)
+        top_agents.append({
+            "agent_id": str(s.agent_id),
+            "name": f"{agent.first_name} {agent.last_name}" if agent else "",
+            "score": float(s.final_score) if s.final_score is not None else None,
+            "grade": s.final_grade,
+            "rank": s.rank,
+        })
+
+    # --- recent periods (for period selector) ---
+    all_periods = db.scalars(
+        select(ScoringPeriod).order_by(ScoringPeriod.start_date.desc())
+    ).all()
+    recent_periods = [
+        {
+            "id": str(p.id),
+            "label": p.label,
+            "start_date": p.start_date.isoformat(),
+            "end_date": p.end_date.isoformat(),
+        }
+        for p in all_periods
+    ]
+
+    return {
+        "period": {
+            "id": str(period.id),
+            "label": period.label,
+            "start_date": period.start_date.isoformat(),
+            "end_date": period.end_date.isoformat(),
+        },
+        "kpi": {
+            "avg_score": round(avg_score, 2) if avg_score is not None else None,
+            "agents_graded": agents_graded,
+            "a_grade_rate": a_grade_rate,
+            "total_pfp_payout": round(total_pfp_payout, 2),
+            "total_money_left": round(total_money_left, 2),
+        },
+        "grade_distribution": grade_distribution,
+        "top_agents": top_agents,
+        "recent_periods": recent_periods,
+    }
+
+
+@router.get("/templates/active")
+def get_active_template(db: Session = Depends(get_db)):
+    """Return the active scorecard template (or the first available one)."""
+    template = db.scalar(
+        select(ScorecardTemplate)
+        .where(ScorecardTemplate.is_active == True)
+        .order_by(ScorecardTemplate.updated_at.desc())
+    )
+    if not template:
+        template = db.scalar(
+            select(ScorecardTemplate).order_by(ScorecardTemplate.created_at.desc())
+        )
+    if not template:
+        raise HTTPException(404, "No scorecard templates exist")
+
+    return {
+        "id": str(template.id),
+        "name": template.name,
+        "period_type": template.period_type,
+        "channel_weight": float(template.channel_weight),
+        "non_channel_weight": float(template.non_channel_weight),
+        "is_active": template.is_active,
     }
