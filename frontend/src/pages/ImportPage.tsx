@@ -10,6 +10,7 @@ import {
   X,
   Info,
 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
 
 type DataType = "auto" | "combined" | "glance_report" | "qa_data" | "hc_data";
@@ -51,17 +52,17 @@ interface ImportResult {
 
 const DATA_TYPES: { value: DataType; label: string; desc: string }[] = [
   { value: "auto", label: "Auto-Detect", desc: "Automatically detect the data format from column headers" },
-  { value: "combined", label: "Combined Data", desc: "All-in-one: metrics, QA, durations per agent per cycle" },
+  { value: "combined", label: "Combined Data", desc: "All-in-one: metrics, QA, durations per agent" },
   { value: "glance_report", label: "Agent Summary Glance Report", desc: "Raw Gladly export with time, contacts, handle times" },
   { value: "qa_data", label: "QA Data", desc: "Quality evaluation scores and counts" },
   { value: "hc_data", label: "HC Data (Hierarchy)", desc: "Agent roster: name, supervisor, site, BPO" },
 ];
 
 export default function ImportPage() {
+  const queryClient = useQueryClient();
   const [step, setStep] = useState<ImportStep>("select");
   const [inputMode, setInputMode] = useState<"upload" | "paste">("upload");
   const [dataType, setDataType] = useState<DataType>("auto");
-  const [cycle, setCycle] = useState<string>("");
   const [pasteText, setPasteText] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
@@ -102,7 +103,6 @@ export default function ImportPage() {
         formData.append("file", selectedFile);
         const params = new URLSearchParams();
         if (dataType !== "auto") params.set("data_type", dataType);
-        if (cycle) params.set("cycle", cycle);
 
         const resp = await api.post(
           `/performance/import/preview?${params.toString()}`,
@@ -114,7 +114,6 @@ export default function ImportPage() {
         const resp = await api.post("/performance/import/paste/preview", {
           text: pasteText,
           data_type: dataType === "auto" ? null : dataType,
-          cycle: cycle ? parseInt(cycle) : null,
         });
         result = resp.data;
       }
@@ -126,7 +125,7 @@ export default function ImportPage() {
     } finally {
       setLoading(false);
     }
-  }, [inputMode, selectedFile, pasteText, dataType, cycle]);
+  }, [inputMode, selectedFile, pasteText, dataType]);
 
   const handleImport = useCallback(async () => {
     setLoading(true);
@@ -142,8 +141,6 @@ export default function ImportPage() {
         const params = new URLSearchParams();
         if (dataType !== "auto" && preview?.data_type)
           params.set("data_type", preview.data_type);
-        if (cycle) params.set("cycle", cycle);
-        // template_id and period_id auto-created by backend if needed
 
         const resp = await api.post(
           `/performance/import/upload?${params.toString()}`,
@@ -155,21 +152,21 @@ export default function ImportPage() {
         const resp = await api.post("/performance/import/paste", {
           text: pasteText,
           data_type: preview?.data_type || (dataType === "auto" ? null : dataType),
-          cycle: cycle ? parseInt(cycle) : null,
-          // template_id and period_id auto-created by backend if needed
         });
         result = resp.data;
       }
 
       setImportResult(result);
       setStep("done");
+      // Refresh periods so header picks up any newly created period
+      queryClient.invalidateQueries({ queryKey: ["scoring-periods"] });
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || "Import failed");
       setStep("preview");
     } finally {
       setLoading(false);
     }
-  }, [inputMode, selectedFile, pasteText, dataType, cycle, preview]);
+  }, [inputMode, selectedFile, pasteText, dataType, preview, queryClient]);
 
   return (
     <div className="space-y-6">
@@ -240,19 +237,6 @@ export default function ImportPage() {
               ))}
             </div>
 
-            {/* Cycle filter (for combined data) */}
-            {(dataType === "auto" || dataType === "combined") && (
-              <div className="mt-4 flex items-center gap-3">
-                <label className="text-sm text-muted-foreground">Cycle Filter (optional):</label>
-                <input
-                  type="number"
-                  value={cycle}
-                  onChange={(e) => setCycle(e.target.value)}
-                  placeholder="e.g. 3"
-                  className="w-24 px-3 py-1.5 text-sm border border-border rounded-lg bg-background"
-                />
-              </div>
-            )}
           </div>
 
           {/* Upload Zone */}
@@ -308,7 +292,7 @@ export default function ImportPage() {
               <textarea
                 value={pasteText}
                 onChange={(e) => setPasteText(e.target.value)}
-                placeholder={`Paste your data here. Include the header row.\n\nExample (tab-separated):\nPerson Name\tCycle\tLogged in Time (hrs)\tPhone Calls Accepted\tAvg Quality Score %\nJohn Smith\t3\t80.5\t245\t0.92`}
+                placeholder={`Paste your data here. Include the header row.\n\nExample (tab-separated):\nPerson Name\tLogged in Time (hrs)\tPhone Calls Accepted\tAvg Quality Score %\nJohn Smith\t80.5\t245\t0.92`}
                 className="w-full h-64 p-4 text-sm font-mono bg-background resize-y focus:outline-none"
               />
               <div className="px-4 py-2 border-t border-border bg-muted/20">
@@ -393,8 +377,8 @@ export default function ImportPage() {
             },
             {
               name: "2. Combined Data",
-              desc: "Upload second — all metrics per agent per cycle, auto-scores",
-              cols: "Person Name, Cycle, Logged in Time, Phone Calls, QA Score, ...",
+              desc: "Upload second — all metrics per agent, auto-scores",
+              cols: "Person Name, Logged in Time, Phone Calls, QA Score, ...",
             },
             {
               name: "Agent Summary Glance Report",

@@ -486,7 +486,7 @@ export default function ScorecardConfigPage() {
               {rescoreMutation.isPending ? "Scoring…" : "Re-Score All Agents"}
             </button>
             {!periodId && (
-              <span className="text-xs text-muted-foreground">Select a period above</span>
+              <span className="text-xs text-muted-foreground">Import data first to enable scoring</span>
             )}
           </div>
         )}

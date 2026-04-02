@@ -86,7 +86,7 @@ export default function PfpPage() {
           </div>
         ) : !periodId ? (
           <p className="text-sm text-muted-foreground">
-            Select a scoring period to see PFP calculations.
+            No scoring data yet. Import data from the Import page to get started.
           </p>
         ) : agents.length === 0 ? (
           <p className="text-sm text-muted-foreground">

@@ -100,7 +100,7 @@ export default function AgentsPage() {
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : !periodId ? (
-          <p className="text-sm text-muted-foreground">Select a scoring period to view agent scores.</p>
+          <p className="text-sm text-muted-foreground">No scoring data yet. Import data from the Import page to get started.</p>
         ) : agents.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No agent scores found for this period. Import data and run scoring first.

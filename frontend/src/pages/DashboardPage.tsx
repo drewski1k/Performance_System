@@ -60,14 +60,20 @@ const GRADE_COLORS: Record<string, string> = {
 };
 
 export default function DashboardPage() {
-  const { periodId } = usePeriod();
+  const { periodId, setPeriodId, setPeriods } = usePeriod();
 
   const { data, isLoading, isError } = useQuery<DashboardSummary>({
     queryKey: ["dashboard-summary", periodId],
     queryFn: async () => {
       const params = periodId ? { period_id: periodId } : {};
       const res = await api.get("/dashboard/summary", { params });
-      return res.data;
+      // Update period context with data from API
+      const d = res.data as DashboardSummary;
+      if (d.recent_periods?.length) {
+        setPeriods(d.recent_periods);
+        if (!periodId) setPeriodId(d.period.id);
+      }
+      return d;
     },
     retry: false,
   });
