@@ -136,16 +136,75 @@ def execute_paste_import(data: ImportExecute, db: Session = Depends(get_db)):
 # --- Scoring ---
 
 @router.post("/calculate/{period_id}")
-def run_scoring(period_id: uuid.UUID, template_id: uuid.UUID, db: Session = Depends(get_db)):
+def run_scoring(
+    period_id: uuid.UUID,
+    template_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+):
     period = db.get(ScoringPeriod, period_id)
     if not period:
         raise HTTPException(404, "Period not found")
-    template = db.get(ScorecardTemplate, template_id)
-    if not template:
-        raise HTTPException(404, "Template not found")
+
+    # Auto-find template if not specified
+    if not template_id:
+        template = db.scalar(
+            select(ScorecardTemplate)
+            .where(ScorecardTemplate.is_active == True)
+            .order_by(ScorecardTemplate.updated_at.desc())
+        )
+        if not template:
+            template = db.scalar(select(ScorecardTemplate).limit(1))
+        if not template:
+            raise HTTPException(404, "No scorecard template found")
+        template_id = template.id
+    else:
+        template = db.get(ScorecardTemplate, template_id)
+        if not template:
+            raise HTTPException(404, "Template not found")
 
     count = calculate_scores(db, period_id, template_id)
-    return {"agents_scored": count, "period_id": str(period_id)}
+    return {"agents_scored": count, "period_id": str(period_id), "template_id": str(template_id)}
+
+
+@router.post("/rescore")
+def rescore_latest(
+    template_id: uuid.UUID | None = None,
+    period_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+):
+    """Re-score agents using existing data. Auto-finds period and template if not specified."""
+    # Find period
+    if period_id:
+        period = db.get(ScoringPeriod, period_id)
+    else:
+        period = db.scalar(
+            select(ScoringPeriod).order_by(ScoringPeriod.start_date.desc())
+        )
+    if not period:
+        raise HTTPException(404, "No scoring period found")
+
+    # Find template
+    if template_id:
+        template = db.get(ScorecardTemplate, template_id)
+    else:
+        template = db.scalar(
+            select(ScorecardTemplate)
+            .where(ScorecardTemplate.is_active == True)
+            .order_by(ScorecardTemplate.updated_at.desc())
+        )
+        if not template:
+            template = db.scalar(select(ScorecardTemplate).limit(1))
+    if not template:
+        raise HTTPException(404, "No scorecard template found")
+
+    count = calculate_scores(db, period.id, template.id)
+    return {
+        "agents_scored": count,
+        "period_id": str(period.id),
+        "period_label": period.label,
+        "template_id": str(template.id),
+        "template_name": template.name,
+    }
 
 
 # --- Helpers ---
