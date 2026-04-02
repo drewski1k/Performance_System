@@ -128,6 +128,7 @@ def update_metric(metric_id: uuid.UUID, data: MetricDefinitionCreate, db: Sessio
 class MetricDefinitionPatch(BaseModel):
     direction: Optional[str] = None
     name: Optional[str] = None
+    display_name: Optional[str] = None
     channel: Optional[str] = None
     unit: Optional[str] = None
 

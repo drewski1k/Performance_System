@@ -13,6 +13,7 @@ class MetricDefinition(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     key: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(String(500))
     channel: Mapped[str | None] = mapped_column(String(20), nullable=True)  # voice, chat, email, sms, non_channel, or NULL (undefined)
     unit: Mapped[str] = mapped_column(String(30), nullable=False)  # seconds, percent, count, ratio

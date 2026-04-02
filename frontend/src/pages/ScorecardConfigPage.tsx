@@ -34,6 +34,7 @@ interface MetricConfig {
   metric_id: string;
   metric_key: string;
   metric_name: string;
+  metric_display_name: string | null;
   channel: string | null;
   direction: string;
   unit: string | null;
@@ -828,6 +829,7 @@ export default function ScorecardConfigPage() {
                               <thead>
                                 <tr className="border-b border-border text-left">
                                   <th className="px-4 py-2 font-medium text-muted-foreground">Metric</th>
+                                  <th className="px-4 py-2 font-medium text-muted-foreground">Display Name</th>
                                   <th className="px-4 py-2 font-medium text-muted-foreground">Channel</th>
                                   <th className="px-4 py-2 font-medium text-muted-foreground">Weight %</th>
                                   <th className="px-4 py-2 font-medium text-muted-foreground">Direction</th>
@@ -840,7 +842,25 @@ export default function ScorecardConfigPage() {
                               <tbody className="divide-y divide-border">
                                 {sectionMetrics.map(({ metric: m, originalIndex: i }) => (
                                   <tr key={m.id ?? i} className="hover:bg-muted/30 transition-colors">
-                                    <td className="px-4 py-2.5 font-medium">{m.metric_name}</td>
+                                    <td className="px-4 py-2.5 font-medium text-muted-foreground text-xs" title={m.metric_key}>{m.metric_name}</td>
+
+                                    {/* Display Name (editable) */}
+                                    <td className="px-4 py-2.5">
+                                      <input
+                                        type="text"
+                                        value={m.metric_display_name ?? ""}
+                                        placeholder={m.metric_name}
+                                        onChange={(e) => updateMetricField(i, "metric_display_name", e.target.value || null as any)}
+                                        onBlur={(e) => {
+                                          api.patch(`/metrics/definitions/${m.metric_id}`, {
+                                            display_name: e.target.value || null,
+                                          }).then(() => {
+                                            queryClient.invalidateQueries({ queryKey: ["scorecard-templates"] });
+                                          });
+                                        }}
+                                        className="w-40 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                                      />
+                                    </td>
 
                                     {/* Channel (editable — change moves metric to different section) */}
                                     <td className="px-4 py-2.5">
