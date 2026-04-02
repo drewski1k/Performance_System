@@ -9,9 +9,11 @@ import {
   Save,
   CheckCircle2,
   RefreshCw,
+  Plus,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
 import { usePeriod } from "@/hooks/usePeriod";
@@ -173,6 +175,71 @@ export default function ScorecardConfigPage() {
   // ── Metrics local state ────────────────────────────────────────────────────
   const [editableMetrics, setEditableMetrics] = useState<EditableMetric[]>([]);
   const [metricsSaved, setMetricsSaved] = useState(false);
+
+  // ── Custom metric form state ──────────────────────────────────────────────
+  const [showCustomForm, setShowCustomForm] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [customKey, setCustomKey] = useState("");
+  const [customFormula, setCustomFormula] = useState("");
+  const [customChannel, setCustomChannel] = useState("non_channel");
+  const [customDirection, setCustomDirection] = useState("higher_better");
+  const [customUnit, setCustomUnit] = useState("percent");
+  const [customError, setCustomError] = useState("");
+  const formulaRef = useRef<HTMLTextAreaElement>(null);
+
+  const { data: metricKeys } = useQuery<{key: string; name: string; channel: string}[]>({
+    queryKey: ["metric-keys"],
+    queryFn: async () => { const r = await api.get("/metrics/definitions/keys"); return r.data; },
+    enabled: showCustomForm,
+  });
+
+  const customMetricMutation = useMutation({
+    mutationFn: async () => {
+      const res = await api.post("/metrics/definitions/custom", {
+        name: customName, key: customKey, formula: customFormula,
+        channel: customChannel, direction: customDirection, unit: customUnit,
+      });
+      // Add to scorecard template
+      if (template) {
+        const newMetric = {
+          metric_id: res.data.id,
+          weight: 0, include_in_score: false, show_on_scorecard: true,
+          min_threshold: 0, threshold_basis: "", grade_mode: "dynamic",
+          sort_order: editableMetrics.length,
+          manual_thresholds: null,
+        };
+        const existingMetrics = editableMetrics.map((m) => ({
+          metric_id: m.metric_id, weight: parseFloat(m._weight) || 0,
+          include_in_score: m.include_in_score, show_on_scorecard: m.show_on_scorecard,
+          min_threshold: m._min_threshold === "" ? null : Number(m._min_threshold),
+          threshold_basis: m.threshold_basis, grade_mode: m.grade_mode ?? "dynamic",
+          sort_order: m.sort_order, manual_thresholds: m.manual_thresholds,
+        }));
+        await api.put(`/scorecards/templates/${template.id}`, { metrics: [...existingMetrics, newMetric] });
+      }
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["scorecard-templates"] });
+      queryClient.invalidateQueries({ queryKey: ["metric-keys"] });
+      setShowCustomForm(false);
+      setCustomName(""); setCustomKey(""); setCustomFormula("");
+      setCustomError("");
+    },
+    onError: (err: any) => {
+      setCustomError(err.response?.data?.detail || err.message || "Failed to create metric");
+    },
+  });
+
+  function insertMetricKey(key: string) {
+    if (!formulaRef.current) return;
+    const ta = formulaRef.current;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const newVal = customFormula.substring(0, start) + key + customFormula.substring(end);
+    setCustomFormula(newVal);
+    setTimeout(() => { ta.focus(); ta.selectionStart = ta.selectionEnd = start + key.length; }, 0);
+  }
 
   useEffect(() => {
     if (template?.metrics) {
@@ -428,17 +495,169 @@ export default function ScorecardConfigPage() {
                   Edit weights, thresholds, and visibility for each metric.
                 </p>
               </div>
-              {template && (
-                <div className="flex items-center gap-3">
-                  {metricsSaved && <SuccessBanner message="Metrics saved" />}
-                  <SaveButton
-                    isPending={metricsMutation.isPending}
-                    onClick={handleSaveMetrics}
-                    label="Save Metrics"
-                  />
-                </div>
-              )}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowCustomForm((v) => !v)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors"
+                >
+                  {showCustomForm ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+                  {showCustomForm ? "Cancel" : "Add Custom Metric"}
+                </button>
+                {template && (
+                  <>
+                    {metricsSaved && <SuccessBanner message="Metrics saved" />}
+                    <SaveButton
+                      isPending={metricsMutation.isPending}
+                      onClick={handleSaveMetrics}
+                      label="Save Metrics"
+                    />
+                  </>
+                )}
+              </div>
             </div>
+
+            {/* Custom Metric Creator Form */}
+            {showCustomForm && (
+              <div className="mb-6 p-4 rounded-lg border border-indigo-200 bg-indigo-50/50 space-y-4">
+                <h4 className="text-sm font-semibold text-indigo-900">Create Custom Metric</h4>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Name */}
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Name</label>
+                    <input
+                      type="text"
+                      value={customName}
+                      onChange={(e) => {
+                        setCustomName(e.target.value);
+                        setCustomKey(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""));
+                      }}
+                      placeholder="e.g. Total Availability Rate"
+                      className="mt-1 w-full border border-input rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                  </div>
+
+                  {/* Key */}
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Key (auto-generated)</label>
+                    <input
+                      type="text"
+                      value={customKey}
+                      onChange={(e) => setCustomKey(e.target.value)}
+                      placeholder="total_availability_rate"
+                      className="mt-1 w-full border border-input rounded-md px-3 py-2 text-sm bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                  </div>
+                </div>
+
+                {/* Formula + Metric Keys */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="md:col-span-2">
+                    <label className="text-xs font-medium text-muted-foreground">
+                      Formula (use metric keys, +, -, *, /, parentheses)
+                    </label>
+                    <textarea
+                      ref={formulaRef}
+                      value={customFormula}
+                      onChange={(e) => setCustomFormula(e.target.value)}
+                      placeholder="e.g. (voice_avail_time + chat_avail_time) / total_logged_time * 100"
+                      rows={3}
+                      className="mt-1 w-full border border-input rounded-md px-3 py-2 text-sm bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring resize-none"
+                    />
+                  </div>
+
+                  {/* Available Metric Keys */}
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">
+                      Available Metrics (click to insert)
+                    </label>
+                    <div className="mt-1 max-h-[108px] overflow-y-auto border border-input rounded-md bg-background p-1.5 space-y-0.5">
+                      {metricKeys?.map((mk) => (
+                        <button
+                          key={mk.key}
+                          type="button"
+                          onClick={() => insertMetricKey(mk.key)}
+                          className="block w-full text-left text-xs px-2 py-1 rounded hover:bg-muted font-mono truncate transition-colors"
+                          title={`${mk.name} (${mk.channel})`}
+                        >
+                          {mk.key}
+                        </button>
+                      )) ?? (
+                        <span className="text-xs text-muted-foreground px-2">Loading...</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Options row */}
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Channel</label>
+                    <select
+                      value={customChannel}
+                      onChange={(e) => setCustomChannel(e.target.value)}
+                      className="mt-1 w-full border border-input rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                    >
+                      <option value="non_channel">Non-Channel</option>
+                      <option value="channel">Channel</option>
+                      <option value="voice">Voice</option>
+                      <option value="chat">Chat</option>
+                      <option value="email">Email</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Direction</label>
+                    <select
+                      value={customDirection}
+                      onChange={(e) => setCustomDirection(e.target.value)}
+                      className="mt-1 w-full border border-input rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                    >
+                      <option value="higher_better">Higher is Better</option>
+                      <option value="lower_better">Lower is Better</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">Unit</label>
+                    <select
+                      value={customUnit}
+                      onChange={(e) => setCustomUnit(e.target.value)}
+                      className="mt-1 w-full border border-input rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                    >
+                      <option value="percent">Percent</option>
+                      <option value="ratio">Ratio</option>
+                      <option value="seconds">Seconds</option>
+                      <option value="count">Count</option>
+                      <option value="currency">Currency</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Error + Create button */}
+                {customError && (
+                  <div className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{customError}</div>
+                )}
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => customMetricMutation.mutate()}
+                    disabled={!customName || !customKey || !customFormula || customMetricMutation.isPending}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                  >
+                    {customMetricMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Plus className="h-4 w-4" />
+                    )}
+                    Create Custom Metric
+                  </button>
+                  <button
+                    onClick={() => { setShowCustomForm(false); setCustomError(""); }}
+                    className="px-4 py-2 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -450,13 +669,14 @@ export default function ScorecardConfigPage() {
                     <th className="pb-3 font-medium text-muted-foreground pr-4">Direction</th>
                     <th className="pb-3 font-medium text-muted-foreground pr-4">Include in Score</th>
                     <th className="pb-3 font-medium text-muted-foreground pr-4">Show on Scorecard</th>
-                    <th className="pb-3 font-medium text-muted-foreground">Min Threshold</th>
+                    <th className="pb-3 font-medium text-muted-foreground pr-4">Min Threshold</th>
+                    <th className="pb-3 font-medium text-muted-foreground">Grade Mode</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {editableMetrics.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-muted-foreground">
+                      <td colSpan={8} className="py-8 text-center text-muted-foreground">
                         Create a scorecard template to configure metrics
                       </td>
                     </tr>
@@ -553,7 +773,7 @@ export default function ScorecardConfigPage() {
                         </td>
 
                         {/* Min Threshold */}
-                        <td className="py-2.5">
+                        <td className="py-2.5 pr-4">
                           <input
                             type="number"
                             step="any"
@@ -564,6 +784,44 @@ export default function ScorecardConfigPage() {
                             }
                             className="w-24 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
                           />
+                        </td>
+
+                        {/* Grade Mode */}
+                        <td className="py-2.5">
+                          <select
+                            value={m.grade_mode ?? "dynamic"}
+                            onChange={(e) => updateMetricField(i, "grade_mode", e.target.value)}
+                            className={cn(
+                              "text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring",
+                              (m.grade_mode ?? "dynamic") === "dynamic" ? "text-blue-700" : "text-purple-700"
+                            )}
+                          >
+                            <option value="dynamic">Dynamic</option>
+                            <option value="manual">Manual</option>
+                          </select>
+                          {(m.grade_mode === "manual") && (
+                            <div className="flex gap-1 mt-1.5">
+                              {(["grade_a", "grade_b", "grade_c", "grade_d"] as const).map((g) => (
+                                <div key={g} className="flex flex-col items-center">
+                                  <span className="text-[10px] text-muted-foreground font-medium">
+                                    {g.replace("grade_", "").toUpperCase()}
+                                  </span>
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    value={m.manual_thresholds?.[g] ?? ""}
+                                    placeholder="—"
+                                    onChange={(e) => {
+                                      const val = e.target.value === "" ? null : Number(e.target.value);
+                                      const updated = { ...m.manual_thresholds, [g]: val };
+                                      updateMetricField(i, "manual_thresholds", updated as Record<string, number>);
+                                    }}
+                                    className="w-16 border border-input rounded px-1 py-0.5 text-xs bg-background text-center focus:outline-none focus:ring-1 focus:ring-ring"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ))
