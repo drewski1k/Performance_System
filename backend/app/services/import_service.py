@@ -37,7 +37,7 @@ _HC_COLS = {"Associate Name", "Job Title", "BPO", "Site", "Supervisor"}
 _DURATIONS_COLS = {"Agent", "Duration (mins)", "Type", "Context"}
 
 # Unified template: fixed roster columns (must appear in this order at start)
-_UNIFIED_ROSTER_COLS = {"Agent Name", "Employee ID", "BPO", "Site", "Supervisor"}
+_UNIFIED_ROSTER_COLS = {"Agent Name", "Email", "BPO", "Site", "Supervisor"}
 
 
 def detect_data_type(df: pd.DataFrame) -> str:
@@ -683,7 +683,7 @@ def execute_performance_import(
 # ---------------------------------------------------------------------------
 
 # Columns that are part of the roster, not metrics
-_UNIFIED_ROSTER_FIELDS = {"agent name", "employee id", "bpo", "site", "supervisor"}
+_UNIFIED_ROSTER_FIELDS = {"agent name", "email", "bpo", "site", "supervisor"}
 
 
 def process_unified_data(df: pd.DataFrame) -> tuple[list[dict], list[dict]]:
@@ -707,7 +707,7 @@ def process_unified_data(df: pd.DataFrame) -> tuple[list[dict], list[dict]]:
 
     for _, row in df.iterrows():
         name = str(row.get("Agent Name", "")).strip()
-        emp_id = str(row.get("Employee ID", "")).strip()
+        email = str(row.get("Email", "")).strip()
         if not name or name in ("nan", "NaT", ""):
             continue
 
@@ -720,12 +720,15 @@ def process_unified_data(df: pd.DataFrame) -> tuple[list[dict], list[dict]]:
             site = ""
         if supervisor in ("nan", "NaT"):
             supervisor = ""
-        if emp_id in ("nan", "NaT", ""):
-            # Generate from name if not provided
-            emp_id = f"agent_{name.lower().replace(' ', '_')}"
+        if email in ("nan", "NaT", ""):
+            email = ""
+
+        # Use email as employee_id if available, otherwise generate from name
+        emp_id = email if email else f"agent_{name.lower().replace(' ', '_')}"
 
         roster.append({
             "name": name,
+            "email": email,
             "employee_id": emp_id,
             "bpo": bpo,
             "site": site or "Unknown",
@@ -796,10 +799,10 @@ def validate_unified_import(roster: list[dict], metrics: list[dict]) -> dict:
             "preview": [],
         }
 
-    # Check for missing employee IDs
-    no_emp_id = [r for r in roster if r["employee_id"].startswith("agent_")]
-    if no_emp_id:
-        warnings.append(f"{len(no_emp_id)} agents have no Employee ID — IDs will be auto-generated from names")
+    # Check for missing emails
+    no_email = [r for r in roster if not r.get("email")]
+    if no_email:
+        warnings.append(f"{len(no_email)} agents have no email — matching will fall back to name")
 
     # Collect all metric keys found
     all_metric_keys = set()
@@ -811,7 +814,7 @@ def validate_unified_import(roster: list[dict], metrics: list[dict]) -> dict:
     for r in roster[:20]:
         row_data = {
             "name": r["name"],
-            "employee_id": r["employee_id"],
+            "email": r.get("email", ""),
             "bpo": r["bpo"],
             "site": r["site"],
             "supervisor": r["supervisor"],
@@ -880,9 +883,12 @@ def execute_unified_import(
     # Pre-load existing agents for matching
     existing_agents = db.scalars(select(Agent)).all()
     emp_id_map: dict[str, Agent] = {}
+    email_map: dict[str, Agent] = {}
     name_map: dict[str, list[Agent]] = defaultdict(list)
     for a in existing_agents:
         emp_id_map[a.employee_id] = a
+        if a.email:
+            email_map[a.email.lower()] = a
         full_name = f"{a.first_name} {a.last_name}".lower()
         name_map[full_name].append(a)
 
@@ -938,13 +944,18 @@ def execute_unified_import(
         last = name_parts[1] if len(name_parts) > 1 else ""
         emp_id = r["employee_id"]
 
+        email = r.get("email", "")
         agent = None
 
-        # Priority 1: Employee ID match
-        if emp_id in emp_id_map:
+        # Priority 1: Email match (most reliable)
+        if email:
+            agent = email_map.get(email.lower())
+
+        # Priority 2: Employee ID match
+        if not agent and emp_id in emp_id_map:
             agent = emp_id_map[emp_id]
 
-        # Priority 2: Name + site match (for auto-generated IDs)
+        # Priority 3: Name + site match
         if not agent:
             name_lower = r["name"].lower()
             candidates = name_map.get(name_lower, [])
@@ -953,7 +964,7 @@ def execute_unified_import(
                     agent = c
                     break
 
-        # Priority 3: Name-only match
+        # Priority 4: Name-only match
         if not agent and candidates:
             agent = candidates[0]
 
@@ -961,21 +972,26 @@ def execute_unified_import(
             agent.supervisor_id = supervisor.id
             agent.first_name = first
             agent.last_name = last
-            # Update employee_id if it was auto-generated and now we have a real one
-            if agent.employee_id.startswith("agent_") and not emp_id.startswith("agent_"):
-                agent.employee_id = emp_id
+            if email:
+                agent.email = email
+            # Update employee_id to email if we now have one
+            if email and agent.employee_id.startswith("agent_"):
+                agent.employee_id = email
             stats["agents_updated"] += 1
         else:
             agent = Agent(
                 supervisor_id=supervisor.id,
                 employee_id=emp_id,
                 first_name=first, last_name=last,
+                email=email or None,
             )
             db.add(agent)
             db.flush()
             stats["agents_created"] += 1
             # Add to maps for future lookups within this batch
             emp_id_map[emp_id] = agent
+            if email:
+                email_map[email.lower()] = agent
             name_map[r["name"].lower()].append(agent)
 
         agent_cache[emp_id] = agent

@@ -270,13 +270,13 @@ export default function ImportPage() {
             <div>
               <p className="text-sm font-medium">Template Structure</p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Columns A-E (required): Agent Name, Employee ID, BPO, Site, Supervisor
+                Columns A-E (required): Agent Name, Email, BPO, Site, Supervisor
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Columns F+ (your metrics): Add any number of metric columns
               </p>
               <p className="text-xs text-muted-foreground/70 mt-1 font-mono">
-                Agent Name | Employee ID | BPO | Site | Supervisor | Voice AHT | Chat CPH | QA Score | ...
+                Agent Name | Email | BPO | Site | Supervisor | Voice AHT | Chat CPH | QA Score | ...
               </p>
             </div>
           </div>

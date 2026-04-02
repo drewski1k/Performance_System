@@ -55,7 +55,7 @@ def download_import_template():
         "2. Fill in one row per agent with their roster info and metric values",
         "3. The first 5 columns (A-E) are required roster fields:",
         "   - Agent Name: Full name of the agent",
-        "   - Employee ID: Unique identifier (used to match existing agents)",
+        "   - Email: Agent's email address (used to match existing agents across uploads)",
         "   - BPO: BPO partner name (e.g., Inktel, Intouch)",
         "   - Site: Site/location name",
         "   - Supervisor: Supervisor's full name",
@@ -67,8 +67,8 @@ def download_import_template():
         "   - You can configure new metrics (channel, weight, direction) in the Scorecard Config tab after upload",
         "",
         "TIPS:",
-        "- Employee ID is the key for matching agents across uploads",
-        "- If an agent already exists (by Employee ID), their roster info will be updated",
+        "- Email is the primary key for matching agents across uploads",
+        "- If an agent already exists (by email), their roster info will be updated",
         "- New agents are created automatically",
         "- Metric values should be numbers (no text, no symbols)",
         "- Percentage metrics: use decimals (0.92) or whole numbers (92) — be consistent",
@@ -95,7 +95,7 @@ def download_import_template():
     # --- Data sheet ---
     ws_data = wb.create_sheet("Data")
 
-    headers = ["Agent Name", "Employee ID", "BPO", "Site", "Supervisor"]
+    headers = ["Agent Name", "Email", "BPO", "Site", "Supervisor"]
     example_metrics = ["Metric 1", "Metric 2", "Metric 3"]
 
     header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
@@ -115,8 +115,8 @@ def download_import_template():
 
     # Example rows
     examples = [
-        ["John Smith", "EMP001", "Inktel", "Miami", "Jane Doe", 245, 180, 0.92],
-        ["Maria Garcia", "EMP002", "Intouch", "Dallas", "Bob Wilson", 310, 95, 0.88],
+        ["John Smith", "john.smith@company.com", "Inktel", "Miami", "Jane Doe", 245, 180, 0.92],
+        ["Maria Garcia", "maria.garcia@company.com", "Intouch", "Dallas", "Bob Wilson", 310, 95, 0.88],
         ["", "", "", "", "", "", "", ""],
     ]
     for row_idx, example in enumerate(examples, 2):
