@@ -1,18 +1,40 @@
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import ScorecardTemplate, ScoringPeriod
-from app.services.import_service import execute_import, parse_csv, parse_excel, validate_import
+from app.services.import_service import (
+    detect_data_type,
+    execute_hc_import,
+    execute_performance_import,
+    parse_paste,
+    parse_upload,
+    process_combined_data,
+    process_glance_report,
+    process_hc_data,
+    process_qa_data,
+    validate_combined_import,
+    validate_hc_import,
+)
 from app.services.scoring import calculate_scores
 
 router = APIRouter(prefix="/performance", tags=["performance"])
 
 
 # --- Scoring Periods ---
+
+class PeriodCreate(BaseModel):
+    company_id: uuid.UUID
+    label: str
+    period_type: str
+    start_date: str
+    end_date: str
+
 
 @router.get("/periods")
 def list_periods(company_id: uuid.UUID | None = None, db: Session = Depends(get_db)):
@@ -23,21 +45,14 @@ def list_periods(company_id: uuid.UUID | None = None, db: Session = Depends(get_
 
 
 @router.post("/periods", status_code=201)
-def create_period(
-    company_id: uuid.UUID,
-    label: str,
-    period_type: str,
-    start_date: str,
-    end_date: str,
-    db: Session = Depends(get_db),
-):
+def create_period(data: PeriodCreate, db: Session = Depends(get_db)):
     from datetime import date as date_type
     period = ScoringPeriod(
-        company_id=company_id,
-        label=label,
-        period_type=period_type,
-        start_date=date_type.fromisoformat(start_date),
-        end_date=date_type.fromisoformat(end_date),
+        company_id=data.company_id,
+        label=data.label,
+        period_type=data.period_type,
+        start_date=date_type.fromisoformat(data.start_date),
+        end_date=date_type.fromisoformat(data.end_date),
     )
     db.add(period)
     db.commit()
@@ -45,43 +60,76 @@ def create_period(
     return period
 
 
-# --- Data Import ---
+# --- Smart Data Import ---
 
-@router.post("/import/validate")
-async def validate_upload(
+class PasteData(BaseModel):
+    text: str
+    data_type: Optional[str] = None  # auto-detect if not provided
+    cycle: Optional[int] = None
+    company_name: Optional[str] = "Default Company"
+
+
+class ImportExecute(BaseModel):
+    text: str
+    data_type: Optional[str] = None
+    cycle: Optional[int] = None
+    template_id: Optional[uuid.UUID] = None
+    period_id: Optional[uuid.UUID] = None
+    company_name: Optional[str] = "Default Company"
+
+
+@router.post("/import/preview")
+async def preview_upload(
     file: UploadFile,
-    template_id: uuid.UUID,
+    data_type: str | None = None,
+    cycle: int | None = None,
     db: Session = Depends(get_db),
 ):
+    """Upload a file and get a preview of what will be imported."""
     content = await file.read()
-    filename = file.filename or ""
+    filename = file.filename or "data.csv"
+    df = parse_upload(content, filename)
 
-    if filename.endswith(".xlsx") or filename.endswith(".xls"):
-        df = parse_excel(content)
-    else:
-        df = parse_csv(content)
-
-    result = validate_import(db, df, template_id)
-    return result
+    detected = data_type or detect_data_type(df)
+    return _preview_dataframe(df, detected, cycle)
 
 
-@router.post("/import/execute")
-async def execute_upload(
+@router.post("/import/paste/preview")
+def preview_paste(data: PasteData):
+    """Paste data and get a preview of what will be imported."""
+    df = parse_paste(data.text)
+    detected = data.data_type or detect_data_type(df)
+    return _preview_dataframe(df, detected, data.cycle)
+
+
+@router.post("/import/upload")
+async def execute_file_import(
     file: UploadFile,
-    template_id: uuid.UUID,
-    period_id: uuid.UUID,
+    data_type: str | None = None,
+    cycle: int | None = None,
+    template_id: uuid.UUID | None = None,
+    period_id: uuid.UUID | None = None,
+    company_name: str = "Default Company",
     db: Session = Depends(get_db),
 ):
+    """Upload and import a file."""
     content = await file.read()
-    filename = file.filename or ""
+    filename = file.filename or "data.csv"
+    df = parse_upload(content, filename)
 
-    if filename.endswith(".xlsx") or filename.endswith(".xls"):
-        df = parse_excel(content)
-    else:
-        df = parse_csv(content)
+    detected = data_type or detect_data_type(df)
+    return _execute_import(db, df, detected, cycle, template_id, period_id, company_name)
 
-    count = execute_import(db, df, template_id, period_id)
-    return {"records_imported": count}
+
+@router.post("/import/paste")
+def execute_paste_import(data: ImportExecute, db: Session = Depends(get_db)):
+    """Paste and import data."""
+    df = parse_paste(data.text)
+    detected = data.data_type or detect_data_type(df)
+    return _execute_import(
+        db, df, detected, data.cycle,
+        data.template_id, data.period_id, data.company_name,
+    )
 
 
 # --- Scoring ---
@@ -97,3 +145,60 @@ def run_scoring(period_id: uuid.UUID, template_id: uuid.UUID, db: Session = Depe
 
     count = calculate_scores(db, period_id, template_id)
     return {"agents_scored": count, "period_id": str(period_id)}
+
+
+# --- Helpers ---
+
+def _preview_dataframe(df, data_type: str, cycle: int | None) -> dict:
+    """Generate preview for any detected data type."""
+    if data_type == "combined":
+        records = process_combined_data(df, cycle=cycle)
+        result = validate_combined_import(records)
+    elif data_type == "glance_report":
+        records = process_glance_report(df)
+        result = validate_combined_import(records)
+    elif data_type == "qa_data":
+        records = process_qa_data(df)
+        result = validate_combined_import(records)
+    elif data_type == "hc_data":
+        records = process_hc_data(df)
+        result = validate_hc_import(records)
+    else:
+        return {
+            "data_type": "unknown",
+            "error": "Could not detect data format. Columns found: " + ", ".join(df.columns[:20]),
+            "valid_rows": 0,
+        }
+
+    result["data_type"] = data_type
+    result["columns_found"] = list(df.columns)
+    result["total_rows"] = len(df)
+    return result
+
+
+def _execute_import(
+    db: Session, df, data_type: str, cycle: int | None,
+    template_id: uuid.UUID | None, period_id: uuid.UUID | None,
+    company_name: str,
+) -> dict:
+    """Execute import for any detected data type."""
+    if data_type == "hc_data":
+        records = process_hc_data(df)
+        stats = execute_hc_import(db, records, company_name)
+        return {"data_type": "hc_data", "status": "success", **stats}
+
+    # Performance data types need template + period
+    if not template_id or not period_id:
+        raise HTTPException(400, "template_id and period_id required for performance data import")
+
+    if data_type == "combined":
+        records = process_combined_data(df, cycle=cycle)
+    elif data_type == "glance_report":
+        records = process_glance_report(df)
+    elif data_type == "qa_data":
+        records = process_qa_data(df)
+    else:
+        raise HTTPException(400, f"Unknown data type: {data_type}")
+
+    stats = execute_performance_import(db, records, template_id, period_id)
+    return {"data_type": data_type, "status": "success", **stats}
