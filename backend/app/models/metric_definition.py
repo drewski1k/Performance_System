@@ -11,10 +11,10 @@ class MetricDefinition(Base):
     __tablename__ = "metric_definitions"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    key: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    key: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(500))
-    channel: Mapped[str] = mapped_column(String(20), nullable=False)  # voice, chat, email, sms, non_channel
+    channel: Mapped[str | None] = mapped_column(String(20), nullable=True)  # voice, chat, email, sms, non_channel, or NULL (undefined)
     unit: Mapped[str] = mapped_column(String(30), nullable=False)  # seconds, percent, count, ratio
     direction: Mapped[str] = mapped_column(String(15), nullable=False, default="higher_better")
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
