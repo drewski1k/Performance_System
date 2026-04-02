@@ -56,11 +56,59 @@ def detect_data_type(df: pd.DataFrame) -> str:
 # Parsing: file bytes → DataFrame
 # ---------------------------------------------------------------------------
 
-def parse_upload(content: bytes, filename: str, sheet_name: str | None = None) -> pd.DataFrame:
-    """Parse uploaded file (CSV or Excel) into a DataFrame."""
-    if filename.endswith((".xlsx", ".xls")):
-        return pd.read_excel(io.BytesIO(content), sheet_name=sheet_name or 0)
-    return pd.read_csv(io.BytesIO(content))
+# Sheet name mapping: data_type → known Excel sheet names to try
+_SHEET_NAMES: dict[str, list[str]] = {
+    "hc_data": ["HC Data", "HC Export"],
+    "combined": ["Combined by Cycle Person (2)", "Combined by Cycle Person", "Combined"],
+    "qa_data": ["QA Data"],
+    "glance_report": ["AgentSummaryGlanceReport", "Agent Summary Glance Report"],
+    "durations": ["AgentDurationsReport", "Agent Durations Report"],
+}
+
+
+def parse_upload(
+    content: bytes, filename: str,
+    sheet_name: str | None = None, data_type: str | None = None,
+) -> pd.DataFrame:
+    """Parse uploaded file (CSV or Excel) into a DataFrame.
+
+    For Excel files with multiple sheets, uses data_type to pick the right
+    sheet, or tries all sheets and auto-detects from column signatures.
+    """
+    if not filename.endswith((".xlsx", ".xls")):
+        return pd.read_csv(io.BytesIO(content))
+
+    buf = io.BytesIO(content)
+
+    # If explicit sheet name given, use it
+    if sheet_name:
+        return pd.read_excel(buf, sheet_name=sheet_name)
+
+    # If data_type specified, try known sheet names for that type
+    if data_type and data_type in _SHEET_NAMES:
+        xl = pd.ExcelFile(buf)
+        for name in _SHEET_NAMES[data_type]:
+            if name in xl.sheet_names:
+                return pd.read_excel(xl, sheet_name=name)
+
+    # Auto-detect: try each sheet and return the first one that matches a known signature
+    buf.seek(0)
+    xl = pd.ExcelFile(buf)
+    for name in xl.sheet_names:
+        try:
+            df = pd.read_excel(xl, sheet_name=name, nrows=5)
+            detected = detect_data_type(df)
+            if detected != "unknown":
+                # If we have a target data_type, only return matching sheets
+                if data_type and detected != data_type:
+                    continue
+                return pd.read_excel(xl, sheet_name=name)
+        except Exception:
+            continue
+
+    # Fallback: read first sheet
+    buf.seek(0)
+    return pd.read_excel(buf, sheet_name=0)
 
 
 def parse_paste(text: str) -> pd.DataFrame:

@@ -89,7 +89,7 @@ async def preview_upload(
     """Upload a file and get a preview of what will be imported."""
     content = await file.read()
     filename = file.filename or "data.csv"
-    df = parse_upload(content, filename)
+    df = parse_upload(content, filename, data_type=data_type)
 
     detected = data_type or detect_data_type(df)
     return _preview_dataframe(df, detected, cycle)
@@ -116,7 +116,7 @@ async def execute_file_import(
     """Upload and import a file."""
     content = await file.read()
     filename = file.filename or "data.csv"
-    df = parse_upload(content, filename)
+    df = parse_upload(content, filename, data_type=data_type)
 
     detected = data_type or detect_data_type(df)
     return _execute_import(db, df, detected, cycle, template_id, period_id, company_name)
