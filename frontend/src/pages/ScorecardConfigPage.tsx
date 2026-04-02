@@ -801,12 +801,12 @@ export default function ScorecardConfigPage() {
 
                 {(() => {
                   const channelSections: { key: string; label: string; color: string; borderColor: string; bgColor: string; badgeColor: string }[] = [
-                    { key: "__undefined__", label: "Undefined — Needs Configuration", color: "text-red-800", borderColor: "border-red-300", bgColor: "bg-red-50", badgeColor: "bg-red-100 text-red-700" },
                     { key: "voice", label: "Voice", color: "text-blue-800", borderColor: "border-blue-200", bgColor: "bg-blue-50", badgeColor: "bg-blue-100 text-blue-700" },
                     { key: "chat", label: "Chat", color: "text-purple-800", borderColor: "border-purple-200", bgColor: "bg-purple-50", badgeColor: "bg-purple-100 text-purple-700" },
                     { key: "email", label: "Email", color: "text-amber-800", borderColor: "border-amber-200", bgColor: "bg-amber-50", badgeColor: "bg-amber-100 text-amber-700" },
                     { key: "non_channel", label: "Non-Channel", color: "text-slate-800", borderColor: "border-slate-200", bgColor: "bg-slate-50", badgeColor: "bg-slate-100 text-slate-700" },
                     { key: "channel", label: "Channel (General)", color: "text-teal-800", borderColor: "border-teal-200", bgColor: "bg-teal-50", badgeColor: "bg-teal-100 text-teal-700" },
+                    { key: "__undefined__", label: "Undefined — Needs Configuration", color: "text-red-800", borderColor: "border-red-300", bgColor: "bg-red-50", badgeColor: "bg-red-100 text-red-700" },
                   ];
 
                   // Filter metrics by search term
