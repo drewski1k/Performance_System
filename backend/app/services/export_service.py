@@ -24,8 +24,10 @@ def export_scorecard_excel(
     db: Session, period_id: uuid.UUID, company_name: str = "Performance Report"
 ) -> bytes:
     """Generate Excel workbook with agent scorecard data."""
+    from sqlalchemy.orm import selectinload
     scores = db.scalars(
         select(AgentPeriodScore)
+        .options(selectinload(AgentPeriodScore.agent).selectinload(Agent.supervisor))
         .where(AgentPeriodScore.scoring_period_id == period_id)
         .order_by(AgentPeriodScore.rank.asc().nullslast())
     ).all()
@@ -52,8 +54,8 @@ def export_scorecard_excel(
 
     # Data rows
     for row_idx, s in enumerate(scores, 2):
-        agent = db.get(Agent, s.agent_id)
-        supervisor = db.get(Supervisor, agent.supervisor_id) if agent else None
+        agent = s.agent
+        supervisor = agent.supervisor if agent else None
 
         values = [
             s.rank,

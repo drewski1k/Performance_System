@@ -35,8 +35,13 @@ def list_agent_scores(
     supervisor_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
 ):
+    from sqlalchemy.orm import selectinload
+
     stmt = (
         select(AgentPeriodScore)
+        .options(
+            selectinload(AgentPeriodScore.agent).selectinload(Agent.supervisor),
+        )
         .where(AgentPeriodScore.scoring_period_id == period_id)
         .order_by(AgentPeriodScore.rank.asc().nullslast())
     )
@@ -48,8 +53,8 @@ def list_agent_scores(
 
     result = []
     for s in scores:
-        agent = db.get(Agent, s.agent_id)
-        supervisor = db.get(Supervisor, agent.supervisor_id) if agent else None
+        agent = s.agent
+        supervisor = agent.supervisor if agent else None
         result.append({
             "agent_id": str(s.agent_id),
             "agent_name": f"{agent.first_name} {agent.last_name}" if agent else "",
@@ -57,16 +62,17 @@ def list_agent_scores(
             "supervisor_name": f"{supervisor.first_name} {supervisor.last_name}" if supervisor else "",
             "rank": s.rank,
             "final_score": float(s.final_score) if s.final_score else None,
-            "final_grade": s.final_grade,
+            "grade": s.final_grade,
             "voice_score": float(s.voice_score) if s.voice_score else None,
             "chat_score": float(s.chat_score) if s.chat_score else None,
             "email_score": float(s.email_score) if s.email_score else None,
             "non_channel_score": float(s.non_channel_score) if s.non_channel_score else None,
             "logged_hours": float(s.logged_hours) if s.logged_hours else None,
+            "pfp_rate": float(s.pfp_rate) if s.pfp_rate else None,
             "pfp_payout": float(s.pfp_payout) if s.pfp_payout else None,
             "pfp_money_left": float(s.pfp_money_left) if s.pfp_money_left else None,
-            "strengths": s.strengths or [],
-            "opportunities": s.opportunities or [],
+            "strengths": [item["metric"] if isinstance(item, dict) else item for item in (s.strengths or [])],
+            "opportunities": [item["metric"] if isinstance(item, dict) else item for item in (s.opportunities or [])],
         })
     return result
 
@@ -90,8 +96,14 @@ def get_agent_scorecard(
         )
     )
 
+    from sqlalchemy.orm import selectinload
     records = db.scalars(
-        select(PerformanceRecord).where(
+        select(PerformanceRecord)
+        .options(
+            selectinload(PerformanceRecord.scorecard_metric)
+            .selectinload(ScorecardMetric.metric),
+        )
+        .where(
             PerformanceRecord.agent_id == agent_id,
             PerformanceRecord.scoring_period_id == period_id,
         )
@@ -99,8 +111,8 @@ def get_agent_scorecard(
 
     metrics = []
     for rec in records:
-        sm = db.get(ScorecardMetric, rec.scorecard_metric_id)
-        metric_def = db.get(MetricDefinition, sm.metric_id) if sm else None
+        sm = rec.scorecard_metric
+        metric_def = sm.metric if sm else None
         metrics.append({
             "metric_key": metric_def.key if metric_def else "",
             "metric_name": metric_def.name if metric_def else "",
@@ -170,8 +182,10 @@ def get_summary(
             raise HTTPException(404, "No scoring periods exist")
 
     # --- all agent scores for this period ---
+    from sqlalchemy.orm import selectinload
     scores = db.scalars(
         select(AgentPeriodScore)
+        .options(selectinload(AgentPeriodScore.agent))
         .where(AgentPeriodScore.scoring_period_id == period.id)
         .order_by(AgentPeriodScore.rank.asc().nullslast())
     ).all()
@@ -202,7 +216,7 @@ def get_summary(
     # --- top 10 agents by rank ---
     top_agents = []
     for s in scores[:10]:
-        agent = db.get(Agent, s.agent_id)
+        agent = s.agent
         top_agents.append({
             "agent_id": str(s.agent_id),
             "name": f"{agent.first_name} {agent.last_name}" if agent else "",

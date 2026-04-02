@@ -129,6 +129,9 @@ def _compute_channel_score(
 
 def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) -> int:
     """Run the full scoring engine for a period. Returns number of agents scored."""
+    import logging
+    log = logging.getLogger(__name__)
+
     template = db.get(ScorecardTemplate, template_id)
     if not template:
         raise ValueError("Template not found")
@@ -138,7 +141,12 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
         _ = sm.metric
         _ = sm.manual_thresholds
 
+    log.warning(f"[SCORING] Template '{template.name}' has {len(template.metrics)} metrics")
+    scored_metrics = [sm for sm in template.metrics if sm.include_in_score]
+    log.warning(f"[SCORING] Of those, {len(scored_metrics)} have include_in_score=True")
+
     agent_records = _get_metric_records(db, period_id, template)
+    log.warning(f"[SCORING] Found records for {len(agent_records)} agents")
     if not agent_records:
         return 0
 
@@ -172,7 +180,7 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
         channel_grades: dict[str, list[tuple[str, float]]] = {
             "voice": [], "chat": [], "email": [],
         }
-        non_channel_grades: dict[str, str] = {}  # metric_key -> grade
+        non_channel_grades: list[tuple[str, float]] = []  # (grade, weight)
         strengths = []
         opportunities = []
 
@@ -199,7 +207,7 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
             if channel in ("voice", "chat", "email"):
                 channel_grades[channel].append((grade, float(sm.weight)))
             elif channel == "non_channel":
-                non_channel_grades[metric_def.key] = grade
+                non_channel_grades.append((grade, float(sm.weight)))
 
             # Strength/opportunity tracking (compare to mean)
             mean = thresholds.get("mean")
@@ -248,19 +256,8 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
                          (email_pct if email_score is not None else 0)
             overall_channel = round(sum(parts) / weight_sum, 2) if weight_sum > 0 else None
 
-        # Non-channel score
-        prod_grade = non_channel_grades.get("productivity_pct")
-        qa_grade = non_channel_grades.get("qa_score_pct")
-        non_channel_score = None
-
-        if prod_grade and qa_grade:
-            non_channel_score = round(
-                (grade_to_non_channel_score(prod_grade) + grade_to_non_channel_score(qa_grade)) / 2, 2
-            )
-        elif prod_grade:
-            non_channel_score = grade_to_non_channel_score(prod_grade)
-        elif qa_grade:
-            non_channel_score = grade_to_non_channel_score(qa_grade)
+        # Non-channel score (weighted like channel scores)
+        non_channel_score = _compute_channel_score(non_channel_grades)
 
         # Final score
         ch_weight = float(template.channel_weight) / 100
