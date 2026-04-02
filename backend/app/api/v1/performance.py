@@ -4,11 +4,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Company, ScorecardTemplate, ScoringPeriod
+from app.models import Company, ScorecardTemplate, ScoringPeriod, PfpConfig
 from app.services.import_service import (
     detect_data_type,
     execute_hc_import,
@@ -224,9 +224,33 @@ def _ensure_template_and_period(
         db.flush()
 
     # Find or create template
+    from app.models import ScorecardMetric
     template = db.scalars(
         select(ScorecardTemplate).where(ScorecardTemplate.company_id == company.id).limit(1)
     ).first()
+    if template:
+        # Ensure template has metrics (fix for templates created without them)
+        metric_count = db.scalar(
+            select(func.count()).select_from(ScorecardMetric)
+            .where(ScorecardMetric.template_id == template.id)
+        )
+        if not metric_count:
+            _seed_template_metrics(db, template.id)
+            # Also ensure PFP config exists
+            existing_pfp = db.scalar(
+                select(PfpConfig).where(PfpConfig.template_id == template.id)
+            )
+            if not existing_pfp:
+                pfp = PfpConfig(
+                    template_id=template.id,
+                    grade_a_rate=Decimal("3"),
+                    grade_b_rate=Decimal("2"),
+                    grade_c_rate=Decimal("0"),
+                    grade_d_rate=Decimal("0"),
+                    grade_f_rate=Decimal("0"),
+                )
+                db.add(pfp)
+                db.flush()
     if not template:
         template = ScorecardTemplate(
             company_id=company.id,
@@ -237,6 +261,21 @@ def _ensure_template_and_period(
             iqr_multiplier=Decimal("1.5"),
         )
         db.add(template)
+        db.flush()
+
+        # Add default scorecard metrics
+        _seed_template_metrics(db, template.id)
+
+        # Add PFP config
+        pfp = PfpConfig(
+            template_id=template.id,
+            grade_a_rate=Decimal("3"),
+            grade_b_rate=Decimal("2"),
+            grade_c_rate=Decimal("0"),
+            grade_d_rate=Decimal("0"),
+            grade_f_rate=Decimal("0"),
+        )
+        db.add(pfp)
         db.flush()
 
     # Find or create period
@@ -259,3 +298,48 @@ def _ensure_template_and_period(
         db.flush()
 
     return template.id, period.id
+
+
+def _seed_template_metrics(db: Session, template_id: uuid.UUID) -> None:
+    """Add default scorecard metrics to a new template."""
+    from app.models import MetricDefinition, ScorecardMetric
+
+    # (metric_key, weight, include_in_score, show_on_scorecard, min_threshold, threshold_basis)
+    metric_configs = [
+        ("voice_aht", 50, True, True, 30, "voice_contacts"),
+        ("voice_cph", 50, True, True, 30, "voice_contacts"),
+        ("chat_aht", 50, True, True, 30, "chat_contacts"),
+        ("chat_cph", 50, True, True, 30, "chat_contacts"),
+        ("email_aht", 50, True, True, 10, "email_contacts"),
+        ("email_cph", 50, True, True, 10, "email_contacts"),
+        ("productivity_pct", 50, True, False, 40, "logged_hours"),
+        ("qa_score_pct", 50, True, False, 5, "qa_evaluations"),
+        # Context-only metrics (not scored, just displayed)
+        ("occupancy_pct", 0, False, True, 0, ""),
+        ("total_logged_time", 0, False, True, 0, ""),
+        ("total_active_time", 0, False, False, 0, ""),
+        ("total_evaluations", 0, False, True, 0, ""),
+        ("contact_accepted_voice", 0, False, True, 0, ""),
+        ("contact_accepted_chat", 0, False, True, 0, ""),
+        ("contact_accepted_email", 0, False, True, 0, ""),
+    ]
+
+    for i, (key, weight, scored, show, threshold, basis) in enumerate(metric_configs):
+        metric_def = db.scalar(
+            select(MetricDefinition).where(MetricDefinition.key == key)
+        )
+        if not metric_def:
+            continue
+        sm = ScorecardMetric(
+            template_id=template_id,
+            metric_id=metric_def.id,
+            weight=Decimal(str(weight)),
+            include_in_score=scored,
+            show_on_scorecard=show,
+            min_threshold=threshold,
+            threshold_basis=basis,
+            grade_mode="dynamic",
+            sort_order=i,
+        )
+        db.add(sm)
+    db.flush()
