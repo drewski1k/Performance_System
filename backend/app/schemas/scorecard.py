@@ -50,7 +50,7 @@ class ScorecardMetricOut(BaseModel):
     metric_id: uuid.UUID
     metric_key: str = ""
     metric_name: str = ""
-    channel: str = ""
+    channel: str | None = ""
     direction: str = ""
     unit: str = ""
     weight: Decimal

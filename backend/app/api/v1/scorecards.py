@@ -28,7 +28,7 @@ def _template_to_out(template: ScorecardTemplate) -> ScorecardTemplateOut:
             metric_id=sm.metric_id,
             metric_key=metric_def.key if metric_def else "",
             metric_name=metric_def.name if metric_def else "",
-            channel=metric_def.channel if metric_def else "",
+            channel=(metric_def.channel or "") if metric_def else "",
             direction=metric_def.direction if metric_def else "",
             unit=metric_def.unit if metric_def else "",
             weight=sm.weight,
