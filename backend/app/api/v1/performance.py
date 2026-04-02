@@ -231,12 +231,18 @@ async def execute_file_import(
     db: Session = Depends(get_db),
 ):
     """Upload and import a file."""
+    import traceback
     content = await file.read()
     filename = file.filename or "data.csv"
-    df = parse_upload(content, filename, data_type=data_type)
-
-    detected = data_type or detect_data_type(df)
-    return _execute_import(db, df, detected, cycle, template_id, period_id, company_name)
+    try:
+        df = parse_upload(content, filename, data_type=data_type)
+        detected = data_type or detect_data_type(df)
+        return _execute_import(db, df, detected, cycle, template_id, period_id, company_name)
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(500, f"Import failed: {str(e)}")
 
 
 @router.post("/import/paste")

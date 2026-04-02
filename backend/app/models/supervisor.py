@@ -12,7 +12,7 @@ class Supervisor(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     site_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), nullable=False)
-    employee_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    employee_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     email: Mapped[str | None] = mapped_column(String(255))
