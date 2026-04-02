@@ -1,8 +1,20 @@
-import { Settings, Scale, Percent, Filter, Zap, DollarSign, Loader2, Save, CheckCircle2 } from "lucide-react";
+import {
+  Settings,
+  Scale,
+  Percent,
+  Filter,
+  Zap,
+  DollarSign,
+  Loader2,
+  Save,
+  CheckCircle2,
+  RefreshCw,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
+import { usePeriod } from "@/hooks/usePeriod";
 
 const tabs = [
   { key: "metrics", label: "Metrics", icon: Settings },
@@ -13,14 +25,24 @@ const tabs = [
   { key: "pfp", label: "PFP Rates", icon: DollarSign },
 ];
 
+// ── Types ────────────────────────────────────────────────────────────────────
+
 interface MetricConfig {
+  id: string;
+  metric_id: string;
+  metric_key: string;
   metric_name: string;
   channel: string | null;
-  weight: number;
   direction: string;
+  unit: string | null;
+  weight: number;
   include_in_score: boolean;
   show_on_scorecard: boolean;
   min_threshold: number | null;
+  threshold_basis: string | null;
+  grade_mode: string | null;
+  sort_order: number;
+  manual_thresholds: Record<string, number> | null;
 }
 
 interface GradeScale {
@@ -49,16 +71,78 @@ interface Template {
   non_channel_weight: number;
   outlier_method: string;
   iqr_multiplier: number;
+  is_active: boolean;
   metrics: MetricConfig[];
   grade_scales: GradeScale[];
   pfp_rates: PfpRate[];
   productivity_states: ProductivityState[];
 }
 
+interface PfpConfig {
+  grade_a_rate: number;
+  grade_b_rate: number;
+  grade_c_rate: number;
+  grade_d_rate: number;
+  grade_f_rate: number;
+}
+
+// ── Editable metric row type (what we track in local state) ──────────────────
+
+interface EditableMetric extends MetricConfig {
+  _weight: string; // string so input is uncontrolled-friendly
+  _min_threshold: string;
+}
+
+function toEditable(m: MetricConfig): EditableMetric {
+  return {
+    ...m,
+    _weight: String(m.weight),
+    _min_threshold: m.min_threshold != null ? String(m.min_threshold) : "",
+  };
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function SaveButton({
+  isPending,
+  onClick,
+  label,
+  disabled,
+}: {
+  isPending: boolean;
+  onClick: () => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={isPending || disabled}
+      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+    >
+      {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+      {label}
+    </button>
+  );
+}
+
+function SuccessBanner({ message }: { message: string }) {
+  return (
+    <div className="flex items-center gap-2 text-sm text-emerald-600 bg-emerald-50 px-4 py-2 rounded-lg">
+      <CheckCircle2 className="h-4 w-4" />
+      {message}
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+
 export default function ScorecardConfigPage() {
   const [activeTab, setActiveTab] = useState("metrics");
   const queryClient = useQueryClient();
+  const { periodId } = usePeriod();
 
+  // ── Template query ─────────────────────────────────────────────────────────
   const { data: templates, isLoading } = useQuery<Template[]>({
     queryKey: ["scorecard-templates"],
     queryFn: async () => {
@@ -69,12 +153,13 @@ export default function ScorecardConfigPage() {
 
   const template = templates?.[0] ?? null;
 
-  // Local editable state
+  // ── Score Weights local state ──────────────────────────────────────────────
   const [channelWeight, setChannelWeight] = useState(0);
   const [nonChannelWeight, setNonChannelWeight] = useState(100);
   const [outlierMethod, setOutlierMethod] = useState("iqr");
   const [iqrMultiplier, setIqrMultiplier] = useState(1.5);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [weightsSaved, setWeightsSaved] = useState(false);
+  const [outliersSaved, setOutliersSaved] = useState(false);
 
   useEffect(() => {
     if (template) {
@@ -85,41 +170,173 @@ export default function ScorecardConfigPage() {
     }
   }, [template]);
 
+  // ── Metrics local state ────────────────────────────────────────────────────
+  const [editableMetrics, setEditableMetrics] = useState<EditableMetric[]>([]);
+  const [metricsSaved, setMetricsSaved] = useState(false);
+
+  useEffect(() => {
+    if (template?.metrics) {
+      setEditableMetrics(template.metrics.map(toEditable));
+    }
+  }, [template]);
+
+  // ── PFP local state ────────────────────────────────────────────────────────
+  const [pfpRates, setPfpRates] = useState<PfpConfig>({
+    grade_a_rate: 0,
+    grade_b_rate: 0,
+    grade_c_rate: 0,
+    grade_d_rate: 0,
+    grade_f_rate: 0,
+  });
+  const [pfpSaved, setPfpSaved] = useState(false);
+
+  const { data: pfpData } = useQuery<PfpConfig>({
+    queryKey: ["scorecard-pfp", template?.id],
+    queryFn: async () => {
+      const res = await api.get(`/scorecards/templates/${template!.id}/pfp`);
+      return res.data;
+    },
+    enabled: !!template?.id,
+  });
+
+  useEffect(() => {
+    if (pfpData) {
+      setPfpRates(pfpData);
+    }
+  }, [pfpData]);
+
+  // ── Re-Score state ─────────────────────────────────────────────────────────
+  const [rescoreResult, setRescoreResult] = useState<string | null>(null);
+
+  // ── Mutations ──────────────────────────────────────────────────────────────
+
   const updateMutation = useMutation({
     mutationFn: async (payload: Partial<Template>) => {
       if (!template) return;
       const res = await api.put(`/scorecards/templates/${template.id}`, payload);
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["scorecard-templates"] });
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 2000);
+      if ("channel_weight" in variables) {
+        setWeightsSaved(true);
+        setTimeout(() => setWeightsSaved(false), 2500);
+      } else if ("outlier_method" in variables) {
+        setOutliersSaved(true);
+        setTimeout(() => setOutliersSaved(false), 2500);
+      }
     },
   });
 
-  function handleSaveWeights() {
-    updateMutation.mutate({
-      channel_weight: channelWeight,
-      non_channel_weight: nonChannelWeight,
-    });
-  }
+  const metricsMutation = useMutation({
+    mutationFn: async (metrics: MetricConfig[]) => {
+      if (!template) return;
+      const res = await api.put(`/scorecards/templates/${template.id}`, { metrics });
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["scorecard-templates"] });
+      setMetricsSaved(true);
+      setTimeout(() => setMetricsSaved(false), 2500);
+    },
+  });
 
-  function handleSaveOutliers() {
-    updateMutation.mutate({
-      outlier_method: outlierMethod,
-      iqr_multiplier: iqrMultiplier,
-    });
-  }
+  const pfpMutation = useMutation({
+    mutationFn: async (payload: PfpConfig) => {
+      if (!template) return;
+      const res = await api.put(`/scorecards/templates/${template.id}/pfp`, payload);
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["scorecard-pfp", template?.id] });
+      setPfpSaved(true);
+      setTimeout(() => setPfpSaved(false), 2500);
+    },
+  });
+
+  const rescoreMutation = useMutation({
+    mutationFn: async () => {
+      if (!periodId || !template) throw new Error("Missing period or template");
+      const res = await api.post(
+        `/performance/calculate/${periodId}?template_id=${template.id}`
+      );
+      return res.data;
+    },
+    onSuccess: (data) => {
+      const count =
+        data?.agents_scored ?? data?.agent_count ?? data?.count ?? null;
+      setRescoreResult(
+        count != null
+          ? `Re-scoring complete — ${count} agent${count !== 1 ? "s" : ""} scored`
+          : "Re-scoring complete"
+      );
+      setTimeout(() => setRescoreResult(null), 5000);
+    },
+  });
+
+  // ── Handlers ───────────────────────────────────────────────────────────────
 
   const totalWeight = channelWeight + nonChannelWeight;
   const weightValid = totalWeight === 100;
 
-  const metrics = template?.metrics ?? [];
+  function handleSaveWeights() {
+    updateMutation.mutate({ channel_weight: channelWeight, non_channel_weight: nonChannelWeight });
+  }
+
+  function handleSaveOutliers() {
+    updateMutation.mutate({ outlier_method: outlierMethod, iqr_multiplier: iqrMultiplier });
+  }
+
+  function handleSaveMetrics() {
+    const metrics: MetricConfig[] = editableMetrics.map((m) => ({
+      id: m.id,
+      metric_id: m.metric_id,
+      metric_key: m.metric_key,
+      metric_name: m.metric_name,
+      channel: m.channel,
+      direction: m.direction,
+      unit: m.unit,
+      weight: parseFloat(m._weight) || 0,
+      include_in_score: m.include_in_score,
+      show_on_scorecard: m.show_on_scorecard,
+      min_threshold: m._min_threshold !== "" ? parseFloat(m._min_threshold) : null,
+      threshold_basis: m.threshold_basis,
+      grade_mode: m.grade_mode,
+      sort_order: m.sort_order,
+      manual_thresholds: m.manual_thresholds,
+    }));
+    metricsMutation.mutate(metrics);
+  }
+
+  function handleSavePfp() {
+    pfpMutation.mutate(pfpRates);
+  }
+
+  function updateMetricField<K extends keyof EditableMetric>(
+    index: number,
+    field: K,
+    value: EditableMetric[K]
+  ) {
+    setEditableMetrics((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  }
+
   const gradeScales = template?.grade_scales ?? [];
-  const pfpRates = template?.pfp_rates ?? [];
   const productivityStates = template?.productivity_states ?? [];
 
+  // ── PFP grade display config ───────────────────────────────────────────────
+  const pfpGrades: { label: string; key: keyof PfpConfig; color: string }[] = [
+    { label: "A", key: "grade_a_rate", color: "border-l-emerald-500" },
+    { label: "B", key: "grade_b_rate", color: "border-l-green-500" },
+    { label: "C", key: "grade_c_rate", color: "border-l-yellow-500" },
+    { label: "D", key: "grade_d_rate", color: "border-l-orange-500" },
+    { label: "F", key: "grade_f_rate", color: "border-l-red-500" },
+  ];
+
+  // ── Loading state ──────────────────────────────────────────────────────────
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -128,15 +345,56 @@ export default function ScorecardConfigPage() {
     );
   }
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Scorecard Configuration</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Configure metrics, weights, grade scales, and scoring rules
-          {template ? ` - ${template.name}` : ""}
-        </p>
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Scorecard Configuration</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Configure metrics, weights, grade scales, and scoring rules
+            {template ? ` — ${template.name}` : ""}
+          </p>
+        </div>
+
+        {/* Re-Score button */}
+        {template && (
+          <div className="flex flex-col items-end gap-1">
+            <button
+              onClick={() => rescoreMutation.mutate()}
+              disabled={rescoreMutation.isPending || !periodId}
+              className={cn(
+                "flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors",
+                "bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+              )}
+              title={!periodId ? "Select a period first" : undefined}
+            >
+              {rescoreMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              {rescoreMutation.isPending ? "Scoring…" : "Re-Score All Agents"}
+            </button>
+            {!periodId && (
+              <span className="text-xs text-muted-foreground">Select a period above</span>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Re-score success banner */}
+      {rescoreResult && (
+        <SuccessBanner message={rescoreResult} />
+      )}
+
+      {/* Re-score error banner */}
+      {rescoreMutation.isError && (
+        <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 px-4 py-2 rounded-lg">
+          Re-scoring failed — {(rescoreMutation.error as Error)?.message ?? "unknown error"}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 bg-muted p-1 rounded-lg w-fit flex-wrap">
@@ -157,49 +415,72 @@ export default function ScorecardConfigPage() {
         ))}
       </div>
 
-      {/* Save success banner */}
-      {saveSuccess && (
-        <div className="flex items-center gap-2 text-sm text-emerald-600 bg-emerald-50 px-4 py-2 rounded-lg">
-          <CheckCircle2 className="h-4 w-4" />
-          Changes saved successfully
-        </div>
-      )}
-
       {/* Tab Content */}
       <div className="bg-card rounded-xl border border-border p-6 shadow-sm">
+
+        {/* ── Metrics tab ─────────────────────────────────────────────────── */}
         {activeTab === "metrics" && (
           <div>
-            <h3 className="text-sm font-semibold mb-4">Metric Configuration</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Configure which metrics are included in scoring, shown on the scorecard, and their weights per channel.
-            </p>
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+              <div>
+                <h3 className="text-sm font-semibold">Metric Configuration</h3>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  Edit weights, thresholds, and visibility for each metric.
+                </p>
+              </div>
+              {template && (
+                <div className="flex items-center gap-3">
+                  {metricsSaved && <SuccessBanner message="Metrics saved" />}
+                  <SaveButton
+                    isPending={metricsMutation.isPending}
+                    onClick={handleSaveMetrics}
+                    label="Save Metrics"
+                  />
+                </div>
+              )}
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left">
-                    <th className="pb-3 font-medium text-muted-foreground">Metric</th>
-                    <th className="pb-3 font-medium text-muted-foreground">Channel</th>
-                    <th className="pb-3 font-medium text-muted-foreground">Weight %</th>
-                    <th className="pb-3 font-medium text-muted-foreground">Direction</th>
-                    <th className="pb-3 font-medium text-muted-foreground">Include in Score</th>
-                    <th className="pb-3 font-medium text-muted-foreground">Show on Scorecard</th>
+                    <th className="pb-3 font-medium text-muted-foreground pr-4">Metric</th>
+                    <th className="pb-3 font-medium text-muted-foreground pr-4">Channel</th>
+                    <th className="pb-3 font-medium text-muted-foreground pr-4">Weight %</th>
+                    <th className="pb-3 font-medium text-muted-foreground pr-4">Direction</th>
+                    <th className="pb-3 font-medium text-muted-foreground pr-4">Include in Score</th>
+                    <th className="pb-3 font-medium text-muted-foreground pr-4">Show on Scorecard</th>
                     <th className="pb-3 font-medium text-muted-foreground">Min Threshold</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {metrics.length === 0 ? (
-                    <tr className="text-muted-foreground">
-                      <td colSpan={7} className="py-8 text-center">
+                  {editableMetrics.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-muted-foreground">
                         Create a scorecard template to configure metrics
                       </td>
                     </tr>
                   ) : (
-                    metrics.map((m, i) => (
-                      <tr key={i}>
-                        <td className="py-2.5 font-medium">{m.metric_name}</td>
-                        <td className="py-2.5 text-muted-foreground">{m.channel ?? "All"}</td>
-                        <td className="py-2.5">{m.weight}%</td>
-                        <td className="py-2.5">
+                    editableMetrics.map((m, i) => (
+                      <tr key={m.id ?? i}>
+                        <td className="py-2.5 font-medium pr-4">{m.metric_name}</td>
+                        <td className="py-2.5 text-muted-foreground pr-4">{m.channel ?? "All"}</td>
+
+                        {/* Weight */}
+                        <td className="py-2.5 pr-4">
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="0.1"
+                            value={m._weight}
+                            onChange={(e) => updateMetricField(i, "_weight", e.target.value)}
+                            className="w-20 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                          />
+                        </td>
+
+                        {/* Direction (read-only badge) */}
+                        <td className="py-2.5 pr-4">
                           <span
                             className={cn(
                               "text-xs px-2 py-0.5 rounded",
@@ -211,32 +492,67 @@ export default function ScorecardConfigPage() {
                             {m.direction === "higher_is_better" ? "Higher" : "Lower"}
                           </span>
                         </td>
-                        <td className="py-2.5">
-                          <span
-                            className={cn(
-                              "text-xs px-2 py-0.5 rounded",
-                              m.include_in_score
-                                ? "bg-emerald-50 text-emerald-700"
-                                : "bg-gray-100 text-gray-500"
-                            )}
-                          >
-                            {m.include_in_score ? "Yes" : "No"}
-                          </span>
+
+                        {/* Include in Score toggle */}
+                        <td className="py-2.5 pr-4">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={m.include_in_score}
+                              onChange={(e) =>
+                                updateMetricField(i, "include_in_score", e.target.checked)
+                              }
+                              className="h-4 w-4 rounded border-input accent-primary"
+                            />
+                            <span
+                              className={cn(
+                                "text-xs px-2 py-0.5 rounded select-none",
+                                m.include_in_score
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : "bg-gray-100 text-gray-500"
+                              )}
+                            >
+                              {m.include_in_score ? "Yes" : "No"}
+                            </span>
+                          </label>
                         </td>
-                        <td className="py-2.5">
-                          <span
-                            className={cn(
-                              "text-xs px-2 py-0.5 rounded",
-                              m.show_on_scorecard
-                                ? "bg-emerald-50 text-emerald-700"
-                                : "bg-gray-100 text-gray-500"
-                            )}
-                          >
-                            {m.show_on_scorecard ? "Yes" : "No"}
-                          </span>
+
+                        {/* Show on Scorecard toggle */}
+                        <td className="py-2.5 pr-4">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={m.show_on_scorecard}
+                              onChange={(e) =>
+                                updateMetricField(i, "show_on_scorecard", e.target.checked)
+                              }
+                              className="h-4 w-4 rounded border-input accent-primary"
+                            />
+                            <span
+                              className={cn(
+                                "text-xs px-2 py-0.5 rounded select-none",
+                                m.show_on_scorecard
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : "bg-gray-100 text-gray-500"
+                              )}
+                            >
+                              {m.show_on_scorecard ? "Yes" : "No"}
+                            </span>
+                          </label>
                         </td>
-                        <td className="py-2.5 text-muted-foreground">
-                          {m.min_threshold != null ? m.min_threshold : "-"}
+
+                        {/* Min Threshold */}
+                        <td className="py-2.5">
+                          <input
+                            type="number"
+                            step="any"
+                            value={m._min_threshold}
+                            placeholder="—"
+                            onChange={(e) =>
+                              updateMetricField(i, "_min_threshold", e.target.value)
+                            }
+                            className="w-24 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                          />
                         </td>
                       </tr>
                     ))
@@ -244,9 +560,22 @@ export default function ScorecardConfigPage() {
                 </tbody>
               </table>
             </div>
+
+            {/* Bottom save button for long tables */}
+            {editableMetrics.length > 5 && template && (
+              <div className="flex items-center gap-3 mt-4 pt-4 border-t border-border">
+                {metricsSaved && <SuccessBanner message="Metrics saved" />}
+                <SaveButton
+                  isPending={metricsMutation.isPending}
+                  onClick={handleSaveMetrics}
+                  label="Save Metrics"
+                />
+              </div>
+            )}
           </div>
         )}
 
+        {/* ── Grade Scales tab (read-only) ─────────────────────────────────── */}
         {activeTab === "grades" && (
           <div>
             <h3 className="text-sm font-semibold mb-4">Grade Scale Configuration</h3>
@@ -264,14 +593,12 @@ export default function ScorecardConfigPage() {
                   >
                     <span className="text-lg font-bold w-8">{gs.grade}</span>
                     <span className="text-sm text-muted-foreground">
-                      {gs.min_score} - {gs.max_score}
+                      {gs.min_score} – {gs.max_score}
                     </span>
                     <span
                       className={cn(
                         "text-xs px-2 py-0.5 rounded",
-                        gs.dynamic
-                          ? "bg-blue-50 text-blue-700"
-                          : "bg-gray-100 text-gray-600"
+                        gs.dynamic ? "bg-blue-50 text-blue-700" : "bg-gray-100 text-gray-600"
                       )}
                     >
                       {gs.dynamic ? "Dynamic" : "Manual"}
@@ -283,6 +610,7 @@ export default function ScorecardConfigPage() {
           </div>
         )}
 
+        {/* ── Score Weights tab ────────────────────────────────────────────── */}
         {activeTab === "weights" && (
           <div>
             <h3 className="text-sm font-semibold mb-4">Final Score Weights</h3>
@@ -326,31 +654,25 @@ export default function ScorecardConfigPage() {
               <div
                 className={cn(
                   "flex items-center gap-2 text-sm px-3 py-2 rounded-lg",
-                  weightValid
-                    ? "text-emerald-600 bg-emerald-50"
-                    : "text-red-600 bg-red-50"
+                  weightValid ? "text-emerald-600 bg-emerald-50" : "text-red-600 bg-red-50"
                 )}
               >
                 Total: {totalWeight}% &mdash; {weightValid ? "Valid" : "Must equal 100%"}
               </div>
+              {weightsSaved && <SuccessBanner message="Weights saved successfully" />}
               {template && (
-                <button
+                <SaveButton
+                  isPending={updateMutation.isPending}
                   onClick={handleSaveWeights}
-                  disabled={!weightValid || updateMutation.isPending}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
-                >
-                  {updateMutation.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Save className="h-4 w-4" />
-                  )}
-                  Save Weights
-                </button>
+                  label="Save Weights"
+                  disabled={!weightValid}
+                />
               )}
             </div>
           </div>
         )}
 
+        {/* ── Outlier Settings tab ─────────────────────────────────────────── */}
         {activeTab === "outliers" && (
           <div>
             <h3 className="text-sm font-semibold mb-4">Outlier Settings</h3>
@@ -382,24 +704,19 @@ export default function ScorecardConfigPage() {
                   Standard: 1.5 | Strict: 1.0 | Lenient: 2.0
                 </p>
               </div>
+              {outliersSaved && <SuccessBanner message="Outlier settings saved" />}
               {template && (
-                <button
+                <SaveButton
+                  isPending={updateMutation.isPending}
                   onClick={handleSaveOutliers}
-                  disabled={updateMutation.isPending}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
-                >
-                  {updateMutation.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Save className="h-4 w-4" />
-                  )}
-                  Save Outlier Settings
-                </button>
+                  label="Save Outlier Settings"
+                />
               )}
             </div>
           </div>
         )}
 
+        {/* ── Productivity States tab (read-only) ──────────────────────────── */}
         {activeTab === "productivity" && (
           <div>
             <h3 className="text-sm font-semibold mb-4">Productivity State Configuration</h3>
@@ -423,18 +740,16 @@ export default function ScorecardConfigPage() {
                         {state.category}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          "text-xs font-medium px-2 py-0.5 rounded",
-                          state.productive
-                            ? "bg-emerald-50 text-emerald-700"
-                            : "bg-red-50 text-red-700"
-                        )}
-                      >
-                        {state.productive ? "Productive" : "Non-Productive"}
-                      </span>
-                    </div>
+                    <span
+                      className={cn(
+                        "text-xs font-medium px-2 py-0.5 rounded",
+                        state.productive
+                          ? "bg-emerald-50 text-emerald-700"
+                          : "bg-red-50 text-red-700"
+                      )}
+                    >
+                      {state.productive ? "Productive" : "Non-Productive"}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -442,47 +757,58 @@ export default function ScorecardConfigPage() {
           </div>
         )}
 
+        {/* ── PFP Rates tab ────────────────────────────────────────────────── */}
         {activeTab === "pfp" && (
           <div>
-            <h3 className="text-sm font-semibold mb-4">Pay for Performance Rates</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Set the dollar amount per logged-in hour for each grade level.
-            </p>
-            {pfpRates.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No PFP rates configured. They will be loaded from the scorecard template.
-              </p>
-            ) : (
-              <div className="max-w-sm space-y-3">
-                {pfpRates.map((g) => {
-                  const colorMap: Record<string, string> = {
-                    A: "border-l-emerald-500",
-                    B: "border-l-green-500",
-                    C: "border-l-yellow-500",
-                    D: "border-l-orange-500",
-                    F: "border-l-red-500",
-                  };
-                  return (
-                    <div
-                      key={g.grade}
-                      className={cn(
-                        "flex items-center gap-4 px-4 py-3 rounded-lg border border-border border-l-4",
-                        colorMap[g.grade] ?? "border-l-gray-400"
-                      )}
-                    >
-                      <span className="text-lg font-bold w-8">{g.grade}</span>
-                      <div className="flex items-center gap-1 flex-1">
-                        <span className="text-muted-foreground">$</span>
-                        <span className="text-sm font-mono">
-                          {g.rate_per_hour.toFixed(2)}
-                        </span>
-                        <span className="text-sm text-muted-foreground">/ logged hour</span>
-                      </div>
-                    </div>
-                  );
-                })}
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+              <div>
+                <h3 className="text-sm font-semibold">Pay for Performance Rates</h3>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  Set the dollar amount per logged-in hour for each grade level.
+                </p>
               </div>
-            )}
+              {template && (
+                <div className="flex items-center gap-3">
+                  {pfpSaved && <SuccessBanner message="PFP rates saved" />}
+                  <SaveButton
+                    isPending={pfpMutation.isPending}
+                    onClick={handleSavePfp}
+                    label="Save PFP Rates"
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="max-w-sm space-y-3">
+              {pfpGrades.map(({ label, key, color }) => (
+                <div
+                  key={key}
+                  className={cn(
+                    "flex items-center gap-4 px-4 py-3 rounded-lg border border-border border-l-4",
+                    color
+                  )}
+                >
+                  <span className="text-lg font-bold w-8">{label}</span>
+                  <div className="flex items-center gap-1 flex-1">
+                    <span className="text-muted-foreground text-sm">$</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={pfpRates[key]}
+                      onChange={(e) =>
+                        setPfpRates((prev) => ({
+                          ...prev,
+                          [key]: parseFloat(e.target.value) || 0,
+                        }))
+                      }
+                      className="w-28 border border-input rounded px-2 py-1 text-sm bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                    <span className="text-sm text-muted-foreground">/ logged hour</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
