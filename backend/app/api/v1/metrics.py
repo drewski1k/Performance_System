@@ -68,3 +68,75 @@ def patch_metric(metric_id: uuid.UUID, data: MetricDefinitionPatch, db: Session 
     db.commit()
     db.refresh(metric)
     return metric
+
+
+class CustomMetricCreate(BaseModel):
+    name: str
+    key: str
+    formula: str
+    channel: str = "non_channel"
+    unit: str = "ratio"
+    direction: str = "higher_better"
+    description: Optional[str] = None
+
+
+@router.post("/definitions/custom", response_model=MetricDefinitionOut, status_code=201)
+def create_custom_metric(data: CustomMetricCreate, db: Session = Depends(get_db)):
+    """Create a custom calculated metric with a formula."""
+    from app.services.formula import validate_formula, extract_metric_keys
+
+    # Validate key uniqueness
+    existing = db.scalar(select(MetricDefinition).where(MetricDefinition.key == data.key))
+    if existing:
+        raise HTTPException(400, f"Metric key '{data.key}' already exists")
+
+    # Validate formula
+    all_keys = {m.key for m in db.scalars(select(MetricDefinition)).all()}
+    errors = validate_formula(data.formula, all_keys)
+    if errors:
+        raise HTTPException(400, f"Invalid formula: {'; '.join(errors)}")
+
+    metric = MetricDefinition(
+        key=data.key,
+        name=data.name,
+        description=data.description or f"Custom: {data.formula}",
+        channel=data.channel,
+        unit=data.unit,
+        direction=data.direction,
+        is_default=False,
+        is_custom=True,
+        formula=data.formula,
+    )
+    db.add(metric)
+    db.commit()
+    db.refresh(metric)
+    return metric
+
+
+@router.get("/definitions/keys")
+def list_metric_keys(db: Session = Depends(get_db)):
+    """Return all metric keys (for formula autocomplete)."""
+    metrics = db.scalars(
+        select(MetricDefinition).order_by(MetricDefinition.channel, MetricDefinition.name)
+    ).all()
+    return [
+        {"key": m.key, "name": m.name, "channel": m.channel}
+        for m in metrics
+    ]
+
+
+@router.post("/definitions/{metric_id}/validate-formula")
+def validate_metric_formula(metric_id: uuid.UUID, body: dict, db: Session = Depends(get_db)):
+    """Validate a formula string against available metric keys."""
+    from app.services.formula import validate_formula, extract_metric_keys
+
+    formula = body.get("formula", "")
+    all_keys = {m.key for m in db.scalars(select(MetricDefinition)).all()}
+    errors = validate_formula(formula, all_keys)
+    referenced = extract_metric_keys(formula)
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "referenced_keys": sorted(referenced),
+    }

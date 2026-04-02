@@ -142,6 +142,9 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
     if not agent_records:
         return 0
 
+    # Step 0: Evaluate custom metric formulas and create derived records
+    _evaluate_custom_metrics(db, period_id, template, agent_records)
+
     # Step 1: Compute dynamic grade scales
     dynamic_scales = _compute_dynamic_scales(db, period_id, template, agent_records)
 
@@ -365,6 +368,73 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
 
     db.commit()
     return len(agent_scores)
+
+
+def _evaluate_custom_metrics(
+    db: Session, period_id: uuid.UUID, template: ScorecardTemplate,
+    agent_records: dict[uuid.UUID, dict[uuid.UUID, PerformanceRecord]],
+) -> None:
+    """Evaluate custom metric formulas and create/update PerformanceRecords."""
+    from app.services.formula import evaluate_formula, resolve_evaluation_order
+
+    # Find custom metrics in the template
+    custom_sms = []
+    sm_lookup = {sm.id: sm for sm in template.metrics}
+
+    for sm in template.metrics:
+        metric_def = sm.metric
+        if metric_def and metric_def.is_custom and metric_def.formula:
+            custom_sms.append({
+                "key": metric_def.key,
+                "formula": metric_def.formula,
+                "sm": sm,
+                "metric_def": metric_def,
+            })
+
+    if not custom_sms:
+        return
+
+    # Resolve evaluation order (handles dependencies between custom metrics)
+    ordered = resolve_evaluation_order(custom_sms)
+
+    # Build key->sm_id mapping for resolving metric references
+    key_to_sm_id: dict[str, uuid.UUID] = {}
+    for sm in template.metrics:
+        if sm.metric:
+            key_to_sm_id[sm.metric.key] = sm.id
+
+    # Evaluate for each agent
+    for agent_id, recs in agent_records.items():
+        # Build current values dict from existing records
+        values: dict[str, float] = {}
+        for sm_id, rec in recs.items():
+            sm = sm_lookup.get(sm_id)
+            if sm and sm.metric:
+                values[sm.metric.key] = float(rec.actual_value)
+
+        # Evaluate each custom metric in dependency order
+        for item in ordered:
+            result = evaluate_formula(item["formula"], values)
+            if result is None:
+                continue
+
+            sm = item["sm"]
+            values[item["key"]] = result  # Make available to subsequent formulas
+
+            # Create or update the performance record
+            existing_rec = recs.get(sm.id)
+            if existing_rec:
+                existing_rec.actual_value = Decimal(str(round(result, 6)))
+            else:
+                new_rec = PerformanceRecord(
+                    agent_id=agent_id,
+                    scoring_period_id=period_id,
+                    scorecard_metric_id=sm.id,
+                    actual_value=Decimal(str(round(result, 6))),
+                )
+                db.add(new_rec)
+                db.flush()
+                recs[sm.id] = new_rec
 
 
 def _get_context_value(

@@ -14,6 +14,8 @@ class MetricDefinitionOut(BaseModel):
     unit: str
     direction: str
     is_default: bool
+    is_custom: bool = False
+    formula: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
