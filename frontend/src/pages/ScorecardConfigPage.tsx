@@ -779,6 +779,7 @@ export default function ScorecardConfigPage() {
               <div className="space-y-6">
                 {(() => {
                   const channelSections: { key: string; label: string; color: string; borderColor: string; bgColor: string; badgeColor: string }[] = [
+                    { key: "__undefined__", label: "Undefined — Needs Configuration", color: "text-red-800", borderColor: "border-red-300", bgColor: "bg-red-50", badgeColor: "bg-red-100 text-red-700" },
                     { key: "voice", label: "Voice", color: "text-blue-800", borderColor: "border-blue-200", bgColor: "bg-blue-50", badgeColor: "bg-blue-100 text-blue-700" },
                     { key: "chat", label: "Chat", color: "text-purple-800", borderColor: "border-purple-200", bgColor: "bg-purple-50", badgeColor: "bg-purple-100 text-purple-700" },
                     { key: "email", label: "Email", color: "text-amber-800", borderColor: "border-amber-200", bgColor: "bg-amber-50", badgeColor: "bg-amber-100 text-amber-700" },
@@ -787,9 +788,10 @@ export default function ScorecardConfigPage() {
                   ];
 
                   // Group metrics by channel, preserving original index
+                  // Metrics with no channel (null/empty) go to __undefined__
                   const grouped = new Map<string, { metric: EditableMetric; originalIndex: number }[]>();
                   editableMetrics.forEach((m, i) => {
-                    const ch = m.channel ?? "non_channel";
+                    const ch = (!m.channel || m.channel === "") ? "__undefined__" : m.channel;
                     if (!grouped.has(ch)) grouped.set(ch, []);
                     grouped.get(ch)!.push({ metric: m, originalIndex: i });
                   });
@@ -843,10 +845,14 @@ export default function ScorecardConfigPage() {
                                     {/* Channel (editable — change moves metric to different section) */}
                                     <td className="px-4 py-2.5">
                                       <select
-                                        value={m.channel ?? "non_channel"}
-                                        onChange={(e) => updateMetricField(i, "channel", e.target.value)}
-                                        className="text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring"
+                                        value={m.channel || ""}
+                                        onChange={(e) => updateMetricField(i, "channel", e.target.value || null as any)}
+                                        className={cn(
+                                          "text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring",
+                                          !m.channel && "text-red-600 border-red-300"
+                                        )}
                                       >
+                                        {!m.channel && <option value="">-- Select Channel --</option>}
                                         <option value="voice">Voice</option>
                                         <option value="chat">Chat</option>
                                         <option value="email">Email</option>

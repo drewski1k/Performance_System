@@ -13,18 +13,135 @@ from app.services.import_service import (
     detect_data_type,
     execute_hc_import,
     execute_performance_import,
+    execute_unified_import,
     parse_paste,
     parse_upload,
     process_combined_data,
     process_glance_report,
     process_hc_data,
     process_qa_data,
+    process_unified_data,
     validate_combined_import,
     validate_hc_import,
+    validate_unified_import,
 )
 from app.services.scoring import calculate_scores
 
+from fastapi.responses import StreamingResponse
+
 router = APIRouter(prefix="/performance", tags=["performance"])
+
+
+@router.get("/template/download")
+def download_import_template():
+    """Download an Excel template for unified data import."""
+    import io
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = openpyxl.Workbook()
+
+    # --- Instructions sheet ---
+    ws_inst = wb.active
+    ws_inst.title = "Instructions"
+    ws_inst.column_dimensions["A"].width = 80
+
+    instructions = [
+        "PERFORMANCE DATA IMPORT TEMPLATE",
+        "",
+        "HOW TO USE THIS TEMPLATE:",
+        "",
+        "1. Go to the 'Data' sheet",
+        "2. Fill in one row per agent with their roster info and metric values",
+        "3. The first 5 columns (A-E) are required roster fields:",
+        "   - Agent Name: Full name of the agent",
+        "   - Employee ID: Unique identifier (used to match existing agents)",
+        "   - BPO: BPO partner name (e.g., Inktel, Intouch)",
+        "   - Site: Site/location name",
+        "   - Supervisor: Supervisor's full name",
+        "",
+        "4. Columns F onward are for metrics — add as many as you need:",
+        "   - Each column header becomes the metric name",
+        "   - Use consistent column names across uploads",
+        "   - New metrics are auto-detected and added to the system",
+        "   - You can configure new metrics (channel, weight, direction) in the Scorecard Config tab after upload",
+        "",
+        "TIPS:",
+        "- Employee ID is the key for matching agents across uploads",
+        "- If an agent already exists (by Employee ID), their roster info will be updated",
+        "- New agents are created automatically",
+        "- Metric values should be numbers (no text, no symbols)",
+        "- Percentage metrics: use decimals (0.92) or whole numbers (92) — be consistent",
+        "",
+        "EXAMPLE METRICS YOU MIGHT ADD:",
+        "Voice AHT | Chat AHT | Email AHT | Voice CPH | Chat CPH",
+        "QA Score | Occupancy | Productivity | Logged Hours",
+        "(or any custom metrics your team tracks)",
+    ]
+
+    header_font = Font(bold=True, size=14)
+    subheader_font = Font(bold=True, size=11)
+    normal_font = Font(size=11)
+
+    for i, line in enumerate(instructions, 1):
+        cell = ws_inst.cell(row=i, column=1, value=line)
+        if i == 1:
+            cell.font = header_font
+        elif line.endswith(":") or line.startswith("TIPS") or line.startswith("EXAMPLE"):
+            cell.font = subheader_font
+        else:
+            cell.font = normal_font
+
+    # --- Data sheet ---
+    ws_data = wb.create_sheet("Data")
+
+    headers = ["Agent Name", "Employee ID", "BPO", "Site", "Supervisor"]
+    example_metrics = ["Metric 1", "Metric 2", "Metric 3"]
+
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    roster_fill = PatternFill(start_color="D6E4F0", end_color="D6E4F0", fill_type="solid")
+    metric_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    border = Border(
+        bottom=Side(style="thin", color="B4C6E7"),
+    )
+
+    for i, h in enumerate(headers + example_metrics, 1):
+        cell = ws_data.cell(row=1, column=i, value=h)
+        cell.font = header_font
+        cell.fill = header_fill if i <= 5 else PatternFill(start_color="548235", end_color="548235", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center")
+        ws_data.column_dimensions[cell.column_letter].width = 18
+
+    # Example rows
+    examples = [
+        ["John Smith", "EMP001", "Inktel", "Miami", "Jane Doe", 245, 180, 0.92],
+        ["Maria Garcia", "EMP002", "Intouch", "Dallas", "Bob Wilson", 310, 95, 0.88],
+        ["", "", "", "", "", "", "", ""],
+    ]
+    for row_idx, example in enumerate(examples, 2):
+        for col_idx, val in enumerate(example, 1):
+            cell = ws_data.cell(row=row_idx, column=col_idx, value=val)
+            if col_idx <= 5:
+                cell.fill = roster_fill
+            else:
+                cell.fill = metric_fill
+            cell.border = border
+
+    # Add note row
+    note_cell = ws_data.cell(row=5, column=1, value="← Add your agents below. Replace example metrics (F1, G1, H1...) with your actual metric names.")
+    note_cell.font = Font(italic=True, color="666666", size=10)
+
+    # Save to buffer
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=performance_import_template.xlsx"},
+    )
 
 
 # --- Scoring Periods ---
@@ -211,7 +328,10 @@ def rescore_latest(
 
 def _preview_dataframe(df, data_type: str, cycle: int | None) -> dict:
     """Generate preview for any detected data type."""
-    if data_type == "combined":
+    if data_type == "unified":
+        roster, metrics = process_unified_data(df)
+        result = validate_unified_import(roster, metrics)
+    elif data_type == "combined":
         records = process_combined_data(df, cycle=cycle)
         result = validate_combined_import(records)
     elif data_type == "glance_report":
@@ -247,9 +367,19 @@ def _execute_import(
         stats = execute_hc_import(db, records, company_name)
         return {"data_type": "hc_data", "status": "success", **stats}
 
-    # Performance data types need template + period — auto-create if missing
+    # All data types below need template + period — auto-create if missing
     if not template_id or not period_id:
         template_id, period_id = _ensure_template_and_period(db, company_name, cycle)
+
+    if data_type == "unified":
+        roster, metrics = process_unified_data(df)
+        stats = execute_unified_import(
+            db, roster, metrics, template_id, period_id, company_name
+        )
+        # Auto-run scoring after import
+        scored = calculate_scores(db, period_id, template_id)
+        stats["agents_scored"] = scored
+        return {"data_type": "unified", "status": "success", **stats}
 
     if data_type == "combined":
         records = process_combined_data(df, cycle=cycle)

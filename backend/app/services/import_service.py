@@ -1,11 +1,12 @@
 """Smart import service for performance data.
 
 Handles multiple data source formats:
-1. Combined Data (all-in-one per agent per cycle)
-2. Agent Summary Glance Report (raw Gladly export)
-3. QA Data (quality scores)
-4. HC Data (hierarchy: agent → supervisor → site → BPO)
-5. Agent Durations Report (for productivity calculation)
+1. Unified Upload (roster + metrics in one sheet)
+2. Combined Data (all-in-one per agent per cycle)
+3. Agent Summary Glance Report (raw Gladly export)
+4. QA Data (quality scores)
+5. HC Data (hierarchy: agent → supervisor → site → BPO)
+6. Agent Durations Report (for productivity calculation)
 
 Supports: Excel file upload, CSV upload, pasted tab/comma-separated text.
 """
@@ -35,10 +36,16 @@ _QA_COLS = {"Associate Name", "Total Evaluations", "Average Quality Score %"}
 _HC_COLS = {"Associate Name", "Job Title", "BPO", "Site", "Supervisor"}
 _DURATIONS_COLS = {"Agent", "Duration (mins)", "Type", "Context"}
 
+# Unified template: fixed roster columns (must appear in this order at start)
+_UNIFIED_ROSTER_COLS = {"Agent Name", "Employee ID", "BPO", "Site", "Supervisor"}
+
 
 def detect_data_type(df: pd.DataFrame) -> str:
     """Auto-detect the data type from column headers."""
     cols = set(df.columns)
+    # Check unified format first (has roster + metrics)
+    if _UNIFIED_ROSTER_COLS.issubset(cols):
+        return "unified"
     if _COMBINED_COLS.issubset(cols):
         return "combined"
     if _GLANCE_COLS.issubset(cols):
@@ -667,5 +674,430 @@ def execute_performance_import(
                 stats["records_created"] += 1
 
     stats["metrics_not_found"] = sorted(stats["metrics_not_found"])
+    db.commit()
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# Unified Upload processing (roster + metrics in one sheet)
+# ---------------------------------------------------------------------------
+
+# Columns that are part of the roster, not metrics
+_UNIFIED_ROSTER_FIELDS = {"agent name", "employee id", "bpo", "site", "supervisor"}
+
+
+def process_unified_data(df: pd.DataFrame) -> tuple[list[dict], list[dict]]:
+    """
+    Process unified upload sheet (roster + metrics in one sheet).
+
+    Returns (roster_records, metric_records) where:
+      roster_records = [{name, employee_id, bpo, site, supervisor}, ...]
+      metric_records = [{name, employee_id, metrics: {col_header: value}}, ...]
+
+    Any column beyond the 5 roster columns is treated as a metric.
+    """
+    roster = []
+    metrics = []
+
+    # Identify metric columns (everything not a roster field)
+    metric_cols = [
+        c for c in df.columns
+        if c.strip().lower() not in _UNIFIED_ROSTER_FIELDS
+    ]
+
+    for _, row in df.iterrows():
+        name = str(row.get("Agent Name", "")).strip()
+        emp_id = str(row.get("Employee ID", "")).strip()
+        if not name or name in ("nan", "NaT", ""):
+            continue
+
+        bpo = str(row.get("BPO", "")).strip()
+        site = str(row.get("Site", "")).strip()
+        supervisor = str(row.get("Supervisor", "")).strip()
+        if bpo in ("nan", "NaT"):
+            bpo = ""
+        if site in ("nan", "NaT"):
+            site = ""
+        if supervisor in ("nan", "NaT"):
+            supervisor = ""
+        if emp_id in ("nan", "NaT", ""):
+            # Generate from name if not provided
+            emp_id = f"agent_{name.lower().replace(' ', '_')}"
+
+        roster.append({
+            "name": name,
+            "employee_id": emp_id,
+            "bpo": bpo,
+            "site": site or "Unknown",
+            "supervisor": supervisor or "Unknown",
+        })
+
+        # Extract metrics
+        agent_metrics: dict[str, float] = {}
+        for col in metric_cols:
+            val = row.get(col)
+            if pd.notna(val):
+                fval = _safe_float_nullable(val)
+                if fval is not None:
+                    # Normalize column header to a metric key
+                    metric_key = _normalize_metric_key(col)
+                    agent_metrics[metric_key] = fval
+
+        if agent_metrics:
+            metrics.append({
+                "name": name,
+                "employee_id": emp_id,
+                "metrics": agent_metrics,
+            })
+
+    return roster, metrics
+
+
+def _normalize_metric_key(col_name: str) -> str:
+    """Convert a column header to a metric key.
+
+    Examples:
+      "Voice AHT" -> "voice_aht"
+      "QA Score %" -> "qa_score_pct"
+      "Avg Handle Time (seconds)" -> "avg_handle_time_seconds"
+    """
+    import re
+    key = col_name.strip()
+    # Replace common symbols
+    key = key.replace("%", "pct").replace("$", "dollars")
+    # Remove parenthetical units but keep content
+    key = re.sub(r"\(([^)]+)\)", r"_\1", key)
+    # Convert to lowercase snake_case
+    key = re.sub(r"[^a-zA-Z0-9]+", "_", key).lower()
+    key = key.strip("_")
+    return key
+
+
+def _safe_float_nullable(val, default=None):
+    """Safely convert to float, returning None for non-numeric values."""
+    if pd.isna(val):
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def validate_unified_import(roster: list[dict], metrics: list[dict]) -> dict:
+    """Validate unified upload data before import."""
+    errors = []
+    warnings = []
+
+    if not roster:
+        return {
+            "valid_rows": 0,
+            "errors": ["No data rows found. Ensure the sheet has columns: Agent Name, Employee ID, BPO, Site, Supervisor"],
+            "warnings": [],
+            "preview": [],
+        }
+
+    # Check for missing employee IDs
+    no_emp_id = [r for r in roster if r["employee_id"].startswith("agent_")]
+    if no_emp_id:
+        warnings.append(f"{len(no_emp_id)} agents have no Employee ID — IDs will be auto-generated from names")
+
+    # Collect all metric keys found
+    all_metric_keys = set()
+    for m in metrics:
+        all_metric_keys.update(m["metrics"].keys())
+
+    # Build preview
+    preview = []
+    for r in roster[:20]:
+        row_data = {
+            "name": r["name"],
+            "employee_id": r["employee_id"],
+            "bpo": r["bpo"],
+            "site": r["site"],
+            "supervisor": r["supervisor"],
+        }
+        # Add metric counts
+        agent_metrics = next((m for m in metrics if m["employee_id"] == r["employee_id"]), None)
+        row_data["metrics_count"] = len(agent_metrics["metrics"]) if agent_metrics else 0
+        preview.append(row_data)
+
+    return {
+        "valid_rows": len(roster),
+        "total_metrics": len(all_metric_keys),
+        "metrics_found": sorted(all_metric_keys),
+        "bpos": sorted(set(r["bpo"] for r in roster if r["bpo"])),
+        "sites": sorted(set(r["site"] for r in roster if r["site"])),
+        "supervisors": sorted(set(r["supervisor"] for r in roster if r["supervisor"])),
+        "errors": errors,
+        "warnings": warnings,
+        "preview": preview,
+    }
+
+
+def execute_unified_import(
+    db: Session,
+    roster: list[dict],
+    metrics: list[dict],
+    template_id: uuid.UUID,
+    period_id: uuid.UUID,
+    company_name: str = "Sephora",
+) -> dict:
+    """
+    Execute unified import: create/update roster AND import metrics in one pass.
+
+    Agent matching priority:
+    1. Employee ID (exact match)
+    2. Name + Site (for agents without explicit Employee IDs)
+    3. Name only (fallback)
+    4. Create new agent if no match
+
+    New metric columns auto-create MetricDefinition (channel=None, lands in 'Undefined')
+    and add to the scorecard template.
+    """
+    from app.models import ScorecardMetric
+
+    stats = {
+        "sites_created": 0, "supervisors_created": 0,
+        "agents_created": 0, "agents_updated": 0,
+        "records_created": 0, "records_updated": 0,
+        "metrics_created": 0, "agents_not_found": 0,
+        "metrics_not_found": [],
+    }
+
+    # --- 1. Roster import (company → sites → supervisors → agents) ---
+    company = db.scalar(select(Company).where(Company.name == company_name))
+    if not company:
+        company = db.scalars(select(Company).limit(1)).first()
+    if not company:
+        company = Company(name=company_name)
+        db.add(company)
+        db.flush()
+
+    site_cache: dict[str, Site] = {}
+    sup_cache: dict[str, Supervisor] = {}
+    agent_cache: dict[str, Agent] = {}  # employee_id -> Agent
+
+    # Pre-load existing agents for matching
+    existing_agents = db.scalars(select(Agent)).all()
+    emp_id_map: dict[str, Agent] = {}
+    name_map: dict[str, list[Agent]] = defaultdict(list)
+    for a in existing_agents:
+        emp_id_map[a.employee_id] = a
+        full_name = f"{a.first_name} {a.last_name}".lower()
+        name_map[full_name].append(a)
+
+    for r in roster:
+        site_name = r["site"] or "Unknown"
+        bpo = r["bpo"] or ""
+
+        # Get or create site
+        site_key = f"{bpo}_{site_name}" if bpo else site_name
+        if site_key not in site_cache:
+            site = db.scalar(
+                select(Site).where(Site.company_id == company.id, Site.name == site_name)
+            )
+            if not site:
+                site = Site(company_id=company.id, name=site_name, location=bpo)
+                db.add(site)
+                db.flush()
+                stats["sites_created"] += 1
+            site_cache[site_key] = site
+        site = site_cache[site_key]
+
+        # Get or create supervisor
+        sup_name = r["supervisor"] or "Unknown"
+        sup_key = f"{site.id}_{sup_name}"
+        if sup_key not in sup_cache:
+            sup_parts = sup_name.split(" ", 1)
+            first = sup_parts[0]
+            last = sup_parts[1] if len(sup_parts) > 1 else ""
+            sup_emp_id = f"sup_{sup_name.lower().replace(' ', '_')}"
+            sup = db.scalar(select(Supervisor).where(Supervisor.employee_id == sup_emp_id))
+            if not sup:
+                sup = db.scalar(
+                    select(Supervisor).where(
+                        Supervisor.site_id == site.id,
+                        Supervisor.first_name == first,
+                        Supervisor.last_name == last,
+                    )
+                )
+            if not sup:
+                sup = Supervisor(
+                    site_id=site.id, employee_id=sup_emp_id,
+                    first_name=first, last_name=last,
+                )
+                db.add(sup)
+                db.flush()
+                stats["supervisors_created"] += 1
+            sup_cache[sup_key] = sup
+        supervisor = sup_cache[sup_key]
+
+        # Match or create agent
+        name_parts = r["name"].split(" ", 1)
+        first = name_parts[0]
+        last = name_parts[1] if len(name_parts) > 1 else ""
+        emp_id = r["employee_id"]
+
+        agent = None
+
+        # Priority 1: Employee ID match
+        if emp_id in emp_id_map:
+            agent = emp_id_map[emp_id]
+
+        # Priority 2: Name + site match (for auto-generated IDs)
+        if not agent:
+            name_lower = r["name"].lower()
+            candidates = name_map.get(name_lower, [])
+            for c in candidates:
+                if c.supervisor and c.supervisor.site_id == site.id:
+                    agent = c
+                    break
+
+        # Priority 3: Name-only match
+        if not agent and candidates:
+            agent = candidates[0]
+
+        if agent:
+            agent.supervisor_id = supervisor.id
+            agent.first_name = first
+            agent.last_name = last
+            # Update employee_id if it was auto-generated and now we have a real one
+            if agent.employee_id.startswith("agent_") and not emp_id.startswith("agent_"):
+                agent.employee_id = emp_id
+            stats["agents_updated"] += 1
+        else:
+            agent = Agent(
+                supervisor_id=supervisor.id,
+                employee_id=emp_id,
+                first_name=first, last_name=last,
+            )
+            db.add(agent)
+            db.flush()
+            stats["agents_created"] += 1
+            # Add to maps for future lookups within this batch
+            emp_id_map[emp_id] = agent
+            name_map[r["name"].lower()].append(agent)
+
+        agent_cache[emp_id] = agent
+
+    db.flush()
+
+    # --- 2. Ensure metric definitions + scorecard metrics exist ---
+    all_metric_keys = set()
+    for m in metrics:
+        all_metric_keys.update(m["metrics"].keys())
+
+    # Build lookup: metric_key -> ScorecardMetric.id
+    sm_lookup: dict[str, uuid.UUID] = {}
+    existing_sms = db.scalars(
+        select(ScorecardMetric).where(ScorecardMetric.template_id == template_id)
+    ).all()
+    for sm in existing_sms:
+        metric_def = db.get(MetricDefinition, sm.metric_id)
+        if metric_def:
+            sm_lookup[metric_def.key] = sm.id
+
+    # Find or create MetricDefinitions and ScorecardMetrics for any new keys
+    existing_metric_defs = {
+        m.key: m for m in db.scalars(select(MetricDefinition)).all()
+    }
+    # Also build a name-based lookup for matching uploaded column names
+    existing_metric_by_name = {
+        m.name.lower(): m for m in existing_metric_defs.values()
+    }
+
+    max_sort = max((sm.sort_order for sm in existing_sms), default=-1) + 1
+
+    for key in all_metric_keys:
+        if key in sm_lookup:
+            continue  # Already mapped
+
+        # Try to find existing MetricDefinition by key
+        metric_def = existing_metric_defs.get(key)
+        # Try by name match
+        if not metric_def:
+            metric_def = existing_metric_by_name.get(key.lower())
+
+        # Create new MetricDefinition if not found
+        if not metric_def:
+            display_name = key.replace("_", " ").title()
+            metric_def = MetricDefinition(
+                key=key,
+                name=display_name,
+                description=f"Auto-imported metric: {display_name}",
+                channel=None,  # Undefined — user configures later
+                unit="ratio",
+                direction="higher_better",
+                is_default=False,
+                is_custom=False,
+            )
+            db.add(metric_def)
+            db.flush()
+            stats["metrics_created"] += 1
+
+        # Create ScorecardMetric linking it to the template
+        sm = ScorecardMetric(
+            template_id=template_id,
+            metric_id=metric_def.id,
+            weight=Decimal("0"),
+            include_in_score=False,
+            show_on_scorecard=True,
+            min_threshold=0,
+            threshold_basis="",
+            grade_mode="dynamic",
+            sort_order=max_sort,
+        )
+        db.add(sm)
+        db.flush()
+        sm_lookup[metric_def.key] = sm.id
+        # Also add the original key if different from metric_def.key
+        if key != metric_def.key:
+            sm_lookup[key] = sm.id
+        max_sort += 1
+
+    # --- 3. Import performance records ---
+    seen: set[tuple] = set()
+
+    for m in metrics:
+        emp_id = m["employee_id"]
+        agent = agent_cache.get(emp_id)
+        if not agent:
+            stats["agents_not_found"] += 1
+            continue
+
+        for metric_key, value in m["metrics"].items():
+            sm_id = sm_lookup.get(metric_key)
+            if not sm_id:
+                continue
+
+            key = (agent.id, sm_id)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            try:
+                dec_value = Decimal(str(round(value, 6)))
+            except (InvalidOperation, ValueError):
+                continue
+
+            existing = db.scalar(
+                select(PerformanceRecord).where(
+                    PerformanceRecord.agent_id == agent.id,
+                    PerformanceRecord.scoring_period_id == period_id,
+                    PerformanceRecord.scorecard_metric_id == sm_id,
+                )
+            )
+            if existing:
+                existing.actual_value = dec_value
+                stats["records_updated"] += 1
+            else:
+                db.add(PerformanceRecord(
+                    agent_id=agent.id,
+                    scoring_period_id=period_id,
+                    scorecard_metric_id=sm_id,
+                    actual_value=dec_value,
+                ))
+                stats["records_created"] += 1
+
     db.commit()
     return stats

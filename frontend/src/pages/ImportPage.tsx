@@ -9,6 +9,7 @@ import {
   ChevronDown,
   X,
   Info,
+  Download,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
@@ -47,6 +48,7 @@ interface ImportResult {
   supervisors_created?: number;
   agents_not_found?: number;
   agents_scored?: number;
+  metrics_created?: number;
   metrics_not_found?: string[];
 }
 
@@ -175,17 +177,27 @@ export default function ImportPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Import Data</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Upload files or paste data from your reports
+            Upload your performance data — roster and metrics in one file
           </p>
         </div>
-        {step !== "select" && (
-          <button
-            onClick={resetState}
-            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        <div className="flex items-center gap-3">
+          <a
+            href={`${api.defaults.baseURL}/performance/template/download`}
+            download
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors"
           >
-            <X className="h-4 w-4" /> Start Over
-          </button>
-        )}
+            <Download className="h-4 w-4" />
+            Download Template
+          </a>
+          {step !== "select" && (
+            <button
+              onClick={resetState}
+              className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <X className="h-4 w-4" /> Start Over
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Step: Select Data Source */}
@@ -359,49 +371,34 @@ export default function ImportPage() {
       <div className="bg-card rounded-xl border border-border p-5 shadow-sm">
         <div className="flex items-center gap-2 mb-3">
           <Info className="h-4 w-4 text-muted-foreground" />
-          <h3 className="text-sm font-semibold">How to Import (Recommended Order)</h3>
+          <h3 className="text-sm font-semibold">How to Import</h3>
         </div>
         <div className="p-3 mb-3 rounded-lg bg-primary/5 border border-primary/20">
           <ol className="text-sm space-y-1.5 list-decimal list-inside text-muted-foreground">
-            <li><span className="font-medium text-foreground">HC Data first</span> — creates agents, supervisors, sites</li>
-            <li><span className="font-medium text-foreground">Combined Data second</span> — imports metrics and auto-runs scoring</li>
+            <li><span className="font-medium text-foreground">Download the template</span> — click the button above to get the Excel template</li>
+            <li><span className="font-medium text-foreground">Fill it out</span> — one row per agent with roster info + metric values</li>
+            <li><span className="font-medium text-foreground">Upload it</span> — the system handles everything: roster, metrics, and scoring</li>
           </ol>
-          <p className="text-xs text-muted-foreground mt-2">The system auto-detects which sheet you're uploading. Just select your Excel file and it will figure out the rest.</p>
+          <p className="text-xs text-muted-foreground mt-2">
+            New metrics are auto-detected from column headers. Configure them (channel, weight, direction) on the Scorecard Config tab after upload.
+          </p>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {[
-            {
-              name: "1. HC Data (Hierarchy)",
-              desc: "Upload this first — sets up the org structure",
-              cols: "Associate Name, Job Title, BPO, Site, Supervisor",
-            },
-            {
-              name: "2. Combined Data",
-              desc: "Upload second — all metrics per agent, auto-scores",
-              cols: "Person Name, Logged in Time, Phone Calls, QA Score, ...",
-            },
-            {
-              name: "Agent Summary Glance Report",
-              desc: "Alternative: raw Gladly export with channel-level times",
-              cols: "Name or Email, Logged in Time in seconds, Contact Accepted - Phone Call, ...",
-            },
-            {
-              name: "QA Data",
-              desc: "Alternative: quality evaluation scores imported separately",
-              cols: "Associate Name, Total Evaluations, Average Quality Score %",
-            },
-          ].map((src) => (
-            <div key={src.name} className="p-3 rounded-lg bg-muted/40">
-              <div className="flex items-start gap-2.5">
-                <FileSpreadsheet className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium">{src.name}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{src.desc}</p>
-                  <p className="text-xs text-muted-foreground/70 mt-1 font-mono">{src.cols}</p>
-                </div>
-              </div>
+        <div className="p-3 rounded-lg bg-muted/40">
+          <div className="flex items-start gap-2.5">
+            <FileSpreadsheet className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium">Template Structure</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Columns A-E (required): Agent Name, Employee ID, BPO, Site, Supervisor
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Columns F+ (your metrics): Add any number of metric columns
+              </p>
+              <p className="text-xs text-muted-foreground/70 mt-1 font-mono">
+                Agent Name | Employee ID | BPO | Site | Supervisor | Voice AHT | Chat CPH | QA Score | ...
+              </p>
             </div>
-          ))}
+          </div>
         </div>
       </div>
     </div>
@@ -571,6 +568,7 @@ function ImportResultPanel({
   onReset: () => void;
 }) {
   const isHC = result.data_type === "hc_data";
+  const isUnified = result.data_type === "unified";
 
   return (
     <div className="bg-card rounded-xl border border-border p-8 shadow-sm text-center space-y-4">
@@ -578,12 +576,25 @@ function ImportResultPanel({
       <div>
         <h2 className="text-lg font-semibold">Import Complete</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          {result.data_type?.replace(/_/g, " ")} data imported successfully
+          {isUnified ? "Performance" : result.data_type?.replace(/_/g, " ")} data imported successfully
         </p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-w-lg mx-auto">
-        {isHC ? (
+        {isUnified ? (
+          <>
+            <StatBadge label="Agents Created" value={result.agents_created || 0} />
+            <StatBadge label="Agents Updated" value={result.agents_updated || 0} />
+            <StatBadge label="Records Created" value={result.records_created || 0} />
+            <StatBadge label="Records Updated" value={result.records_updated || 0} />
+            {result.metrics_created ? (
+              <StatBadge label="New Metrics Detected" value={result.metrics_created} />
+            ) : null}
+            {result.agents_scored ? (
+              <StatBadge label="Agents Scored" value={result.agents_scored} />
+            ) : null}
+          </>
+        ) : isHC ? (
           <>
             <StatBadge label="Sites Created" value={result.sites_created || 0} />
             <StatBadge label="Supervisors Created" value={result.supervisors_created || 0} />
@@ -609,6 +620,15 @@ function ImportResultPanel({
           <p className="text-xs text-yellow-700 mb-1 font-medium">Unmatched metrics (not in scorecard template):</p>
           <p className="text-xs text-yellow-600">
             {result.metrics_not_found.join(", ")}
+          </p>
+        </div>
+      )}
+
+      {isUnified && (result.metrics_created ?? 0) > 0 && (
+        <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 max-w-lg mx-auto">
+          <p className="text-xs text-blue-700">
+            {result.metrics_created} new metric{result.metrics_created !== 1 ? "s were" : " was"} detected and added to the system.
+            Go to <span className="font-medium">Scorecard Config &rarr; Metrics</span> to set the channel, weight, and direction for each.
           </p>
         </div>
       )}
