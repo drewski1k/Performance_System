@@ -319,9 +319,9 @@ def _seed_template_metrics(db: Session, template_id: uuid.UUID) -> None:
         ("total_logged_time", 0, False, True, 0, ""),
         ("total_active_time", 0, False, False, 0, ""),
         ("total_evaluations", 0, False, True, 0, ""),
-        ("contact_accepted_voice", 0, False, True, 0, ""),
-        ("contact_accepted_chat", 0, False, True, 0, ""),
-        ("contact_accepted_email", 0, False, True, 0, ""),
+        ("voice_accepted", 0, False, True, 0, ""),
+        ("chat_accepted", 0, False, True, 0, ""),
+        ("email_accepted", 0, False, True, 0, ""),
     ]
 
     for i, (key, weight, scored, show, threshold, basis) in enumerate(metric_configs):
