@@ -526,39 +526,35 @@ export default function ScorecardConfigPage() {
         ))}
       </div>
 
+      {/* Sticky action bar for metrics tab */}
+      {activeTab === "metrics" && template && (
+        <div className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border border-border rounded-lg px-4 py-3 flex items-center justify-between flex-wrap gap-3 shadow-sm">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowCustomForm((v) => !v)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors"
+            >
+              {showCustomForm ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+              {showCustomForm ? "Cancel" : "Add Custom Metric"}
+            </button>
+          </div>
+          <div className="flex items-center gap-3">
+            {metricsSaved && <SuccessBanner message="Metrics saved" />}
+            <SaveButton
+              isPending={metricsMutation.isPending}
+              onClick={handleSaveMetrics}
+              label="Save Metrics"
+            />
+          </div>
+        </div>
+      )}
+
       {/* Tab Content */}
       <div className="bg-card rounded-xl border border-border p-6 shadow-sm">
 
         {/* ── Metrics tab ─────────────────────────────────────────────────── */}
         {activeTab === "metrics" && (
           <div>
-            <div className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b border-border -mx-6 px-6 py-3 mb-4 flex items-center justify-between flex-wrap gap-3">
-              <div>
-                <h3 className="text-sm font-semibold">Metric Configuration</h3>
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  Edit weights, thresholds, and visibility for each metric.
-                </p>
-              </div>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setShowCustomForm((v) => !v)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors"
-                >
-                  {showCustomForm ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-                  {showCustomForm ? "Cancel" : "Add Custom Metric"}
-                </button>
-                {template && (
-                  <>
-                    {metricsSaved && <SuccessBanner message="Metrics saved" />}
-                    <SaveButton
-                      isPending={metricsMutation.isPending}
-                      onClick={handleSaveMetrics}
-                      label="Save Metrics"
-                    />
-                  </>
-                )}
-              </div>
-            </div>
 
             {/* Custom Metric Creator Form */}
             {showCustomForm && (
