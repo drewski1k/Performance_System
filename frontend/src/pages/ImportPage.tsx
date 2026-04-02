@@ -2,11 +2,9 @@ import { useState, useCallback, useRef } from "react";
 import {
   Upload,
   FileSpreadsheet,
-  ClipboardPaste,
   AlertCircle,
   CheckCircle2,
   Loader2,
-  ChevronDown,
   X,
   Info,
   Download,
@@ -14,7 +12,6 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
 
-type DataType = "auto" | "combined" | "glance_report" | "qa_data" | "hc_data";
 type ImportStep = "select" | "preview" | "importing" | "done";
 
 interface PreviewRow {
@@ -52,20 +49,9 @@ interface ImportResult {
   metrics_not_found?: string[];
 }
 
-const DATA_TYPES: { value: DataType; label: string; desc: string }[] = [
-  { value: "auto", label: "Auto-Detect", desc: "Automatically detect the data format from column headers" },
-  { value: "combined", label: "Combined Data", desc: "All-in-one: metrics, QA, durations per agent" },
-  { value: "glance_report", label: "Agent Summary Glance Report", desc: "Raw Gladly export with time, contacts, handle times" },
-  { value: "qa_data", label: "QA Data", desc: "Quality evaluation scores and counts" },
-  { value: "hc_data", label: "HC Data (Hierarchy)", desc: "Agent roster: name, supervisor, site, BPO" },
-];
-
 export default function ImportPage() {
   const queryClient = useQueryClient();
   const [step, setStep] = useState<ImportStep>("select");
-  const [inputMode, setInputMode] = useState<"upload" | "paste">("upload");
-  const [dataType, setDataType] = useState<DataType>("auto");
-  const [pasteText, setPasteText] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
@@ -79,7 +65,6 @@ export default function ImportPage() {
     setImportResult(null);
     setError(null);
     setSelectedFile(null);
-    setPasteText("");
   }, []);
 
   const handleFileDrop = useCallback((e: React.DragEvent) => {
@@ -94,73 +79,43 @@ export default function ImportPage() {
   }, []);
 
   const handlePreview = useCallback(async () => {
+    if (!selectedFile) return;
     setLoading(true);
     setError(null);
 
     try {
-      let result: PreviewResult;
+      const formData = new FormData();
+      formData.append("file", selectedFile);
 
-      if (inputMode === "upload" && selectedFile) {
-        const formData = new FormData();
-        formData.append("file", selectedFile);
-        const params = new URLSearchParams();
-        if (dataType !== "auto") params.set("data_type", dataType);
+      const resp = await api.post("/performance/import/preview", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
 
-        const resp = await api.post(
-          `/performance/import/preview?${params.toString()}`,
-          formData,
-          { headers: { "Content-Type": "multipart/form-data" } }
-        );
-        result = resp.data;
-      } else {
-        const resp = await api.post("/performance/import/paste/preview", {
-          text: pasteText,
-          data_type: dataType === "auto" ? null : dataType,
-        });
-        result = resp.data;
-      }
-
-      setPreview(result);
+      setPreview(resp.data);
       setStep("preview");
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || "Preview failed");
     } finally {
       setLoading(false);
     }
-  }, [inputMode, selectedFile, pasteText, dataType]);
+  }, [selectedFile]);
 
   const handleImport = useCallback(async () => {
+    if (!selectedFile) return;
     setLoading(true);
     setError(null);
     setStep("importing");
 
     try {
-      let result: ImportResult;
+      const formData = new FormData();
+      formData.append("file", selectedFile);
 
-      if (inputMode === "upload" && selectedFile) {
-        const formData = new FormData();
-        formData.append("file", selectedFile);
-        const params = new URLSearchParams();
-        if (dataType !== "auto" && preview?.data_type)
-          params.set("data_type", preview.data_type);
+      const resp = await api.post("/performance/import/upload", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
 
-        const resp = await api.post(
-          `/performance/import/upload?${params.toString()}`,
-          formData,
-          { headers: { "Content-Type": "multipart/form-data" } }
-        );
-        result = resp.data;
-      } else {
-        const resp = await api.post("/performance/import/paste", {
-          text: pasteText,
-          data_type: preview?.data_type || (dataType === "auto" ? null : dataType),
-        });
-        result = resp.data;
-      }
-
-      setImportResult(result);
+      setImportResult(resp.data);
       setStep("done");
-      // Refresh periods so header picks up any newly created period
       queryClient.invalidateQueries({ queryKey: ["scoring-periods"] });
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || "Import failed");
@@ -168,7 +123,7 @@ export default function ImportPage() {
     } finally {
       setLoading(false);
     }
-  }, [inputMode, selectedFile, pasteText, dataType, preview, queryClient]);
+  }, [selectedFile, queryClient]);
 
   return (
     <div className="space-y-6">
@@ -200,124 +155,49 @@ export default function ImportPage() {
         </div>
       </div>
 
-      {/* Step: Select Data Source */}
+      {/* Step: Upload */}
       {step === "select" && (
         <>
-          {/* Input Mode Toggle */}
-          <div className="flex gap-2">
-            <button
-              onClick={() => setInputMode("upload")}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                inputMode === "upload"
-                  ? "bg-primary text-primary-foreground shadow-sm"
-                  : "bg-muted/60 text-muted-foreground hover:bg-muted"
-              }`}
-            >
-              <Upload className="h-4 w-4" />
-              Upload File
-            </button>
-            <button
-              onClick={() => setInputMode("paste")}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                inputMode === "paste"
-                  ? "bg-primary text-primary-foreground shadow-sm"
-                  : "bg-muted/60 text-muted-foreground hover:bg-muted"
-              }`}
-            >
-              <ClipboardPaste className="h-4 w-4" />
-              Paste Data
-            </button>
-          </div>
-
-          {/* Data Type Selector */}
-          <div className="bg-card rounded-xl border border-border p-5 shadow-sm">
-            <label className="text-sm font-medium mb-2 block">Data Source Type</label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {DATA_TYPES.map((dt) => (
-                <button
-                  key={dt.value}
-                  onClick={() => setDataType(dt.value)}
-                  className={`text-left p-3 rounded-lg border transition-all ${
-                    dataType === dt.value
-                      ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-                      : "border-border hover:border-primary/30 bg-muted/30"
-                  }`}
-                >
-                  <p className="text-sm font-medium">{dt.label}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{dt.desc}</p>
-                </button>
-              ))}
-            </div>
-
-          </div>
-
-          {/* Upload Zone */}
-          {inputMode === "upload" && (
-            <div
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={handleFileDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`bg-card rounded-xl border-2 border-dashed p-10 text-center shadow-sm cursor-pointer transition-colors ${
-                selectedFile
-                  ? "border-primary/50 bg-primary/5"
-                  : "border-border hover:border-primary/40"
-              }`}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".csv,.xlsx,.xls,.tsv"
-                onChange={handleFileSelect}
-                className="hidden"
-              />
-              {selectedFile ? (
-                <div className="flex items-center justify-center gap-3">
-                  <FileSpreadsheet className="h-8 w-8 text-primary" />
-                  <div className="text-left">
-                    <p className="text-sm font-medium">{selectedFile.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {(selectedFile.size / 1024).toFixed(1)} KB &middot; Click to change
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <Upload className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-                  <p className="text-sm font-medium mb-1">
-                    Drag and drop your file here, or click to browse
-                  </p>
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleFileDrop}
+            onClick={() => fileInputRef.current?.click()}
+            className={`bg-card rounded-xl border-2 border-dashed p-12 text-center shadow-sm cursor-pointer transition-colors ${
+              selectedFile
+                ? "border-primary/50 bg-primary/5"
+                : "border-border hover:border-primary/40"
+            }`}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+            {selectedFile ? (
+              <div className="flex items-center justify-center gap-3">
+                <FileSpreadsheet className="h-8 w-8 text-primary" />
+                <div className="text-left">
+                  <p className="text-sm font-medium">{selectedFile.name}</p>
                   <p className="text-xs text-muted-foreground">
-                    Supports CSV, TSV, and Excel (.xlsx) files
+                    {(selectedFile.size / 1024).toFixed(1)} KB &middot; Click to change
                   </p>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* Paste Zone */}
-          {inputMode === "paste" && (
-            <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
-              <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-muted/30">
-                <ClipboardPaste className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-medium">Paste tab-separated or CSV data below</span>
+                </div>
               </div>
-              <textarea
-                value={pasteText}
-                onChange={(e) => setPasteText(e.target.value)}
-                placeholder={`Paste your data here. Include the header row.\n\nExample (tab-separated):\nPerson Name\tLogged in Time (hrs)\tPhone Calls Accepted\tAvg Quality Score %\nJohn Smith\t80.5\t245\t0.92`}
-                className="w-full h-64 p-4 text-sm font-mono bg-background resize-y focus:outline-none"
-              />
-              <div className="px-4 py-2 border-t border-border bg-muted/20">
-                <p className="text-xs text-muted-foreground">
-                  {pasteText
-                    ? `${pasteText.split("\n").length - 1} data rows detected`
-                    : "Tip: Copy rows from Excel and paste here (Ctrl+V)"}
+            ) : (
+              <>
+                <Upload className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+                <p className="text-sm font-medium mb-1">
+                  Drag and drop your file here, or click to browse
                 </p>
-              </div>
-            </div>
-          )}
+                <p className="text-xs text-muted-foreground">
+                  Excel (.xlsx) or CSV file using the template format
+                </p>
+              </>
+            )}
+          </div>
 
-          {/* Error */}
           {error && (
             <div className="flex items-start gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
               <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
@@ -325,21 +205,22 @@ export default function ImportPage() {
             </div>
           )}
 
-          {/* Preview Button */}
-          <div className="flex justify-end">
-            <button
-              onClick={handlePreview}
-              disabled={loading || (inputMode === "upload" ? !selectedFile : !pasteText.trim())}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors"
-            >
-              {loading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <ChevronDown className="h-4 w-4" />
-              )}
-              Preview Data
-            </button>
-          </div>
+          {selectedFile && (
+            <div className="flex justify-end">
+              <button
+                onClick={handlePreview}
+                disabled={loading}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 hover:bg-primary/90 transition-colors"
+              >
+                {loading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4" />
+                )}
+                Preview Data
+              </button>
+            </div>
+          )}
         </>
       )}
 
@@ -367,7 +248,7 @@ export default function ImportPage() {
         <ImportResultPanel result={importResult} onReset={resetState} />
       )}
 
-      {/* Help Section */}
+      {/* How to Import */}
       <div className="bg-card rounded-xl border border-border p-5 shadow-sm">
         <div className="flex items-center gap-2 mb-3">
           <Info className="h-4 w-4 text-muted-foreground" />
@@ -427,11 +308,7 @@ function PreviewPanel({
     <div className="space-y-4">
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <SummaryCard
-          label="Data Type"
-          value={preview.data_type?.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) || "Unknown"}
-        />
-        <SummaryCard label="Valid Rows" value={preview.valid_rows} />
+        <SummaryCard label="Agents" value={preview.valid_rows} />
         {preview.total_metrics != null && (
           <SummaryCard label="Metrics Found" value={preview.total_metrics} />
         )}
@@ -486,7 +363,7 @@ function PreviewPanel({
         <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
           <div className="px-4 py-3 border-b border-border bg-muted/30">
             <h4 className="text-sm font-medium">
-              Data Preview ({Math.min(preview.preview.length, 20)} of {preview.valid_rows} rows)
+              Preview ({Math.min(preview.preview.length, 20)} of {preview.valid_rows} rows)
             </h4>
           </div>
           <div className="overflow-x-auto">
@@ -567,64 +444,39 @@ function ImportResultPanel({
   result: ImportResult;
   onReset: () => void;
 }) {
-  const isHC = result.data_type === "hc_data";
-  const isUnified = result.data_type === "unified";
-
   return (
     <div className="bg-card rounded-xl border border-border p-8 shadow-sm text-center space-y-4">
       <CheckCircle2 className="h-12 w-12 text-emerald-500 mx-auto" />
       <div>
         <h2 className="text-lg font-semibold">Import Complete</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          {isUnified ? "Performance" : result.data_type?.replace(/_/g, " ")} data imported successfully
+          Performance data imported successfully
         </p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-w-lg mx-auto">
-        {isUnified ? (
-          <>
-            <StatBadge label="Agents Created" value={result.agents_created || 0} />
-            <StatBadge label="Agents Updated" value={result.agents_updated || 0} />
-            <StatBadge label="Records Created" value={result.records_created || 0} />
-            <StatBadge label="Records Updated" value={result.records_updated || 0} />
-            {result.metrics_created ? (
-              <StatBadge label="New Metrics Detected" value={result.metrics_created} />
-            ) : null}
-            {result.agents_scored ? (
-              <StatBadge label="Agents Scored" value={result.agents_scored} />
-            ) : null}
-          </>
-        ) : isHC ? (
-          <>
-            <StatBadge label="Sites Created" value={result.sites_created || 0} />
-            <StatBadge label="Supervisors Created" value={result.supervisors_created || 0} />
-            <StatBadge label="Agents Created" value={result.agents_created || 0} />
-            <StatBadge label="Agents Updated" value={result.agents_updated || 0} />
-          </>
-        ) : (
-          <>
-            <StatBadge label="Records Created" value={result.records_created || 0} />
-            <StatBadge label="Records Updated" value={result.records_updated || 0} />
-            {result.agents_scored ? (
-              <StatBadge label="Agents Scored" value={result.agents_scored} />
-            ) : null}
-            {result.agents_not_found ? (
-              <StatBadge label="Agents Not Found" value={result.agents_not_found} warn />
-            ) : null}
-          </>
-        )}
+        <StatBadge label="Agents Created" value={result.agents_created || 0} />
+        <StatBadge label="Agents Updated" value={result.agents_updated || 0} />
+        <StatBadge label="Records Created" value={result.records_created || 0} />
+        <StatBadge label="Records Updated" value={result.records_updated || 0} />
+        {result.metrics_created ? (
+          <StatBadge label="New Metrics Detected" value={result.metrics_created} />
+        ) : null}
+        {result.agents_scored ? (
+          <StatBadge label="Agents Scored" value={result.agents_scored} />
+        ) : null}
       </div>
 
       {result.metrics_not_found && result.metrics_not_found.length > 0 && (
         <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 max-w-lg mx-auto">
-          <p className="text-xs text-yellow-700 mb-1 font-medium">Unmatched metrics (not in scorecard template):</p>
+          <p className="text-xs text-yellow-700 mb-1 font-medium">Unmatched metrics:</p>
           <p className="text-xs text-yellow-600">
             {result.metrics_not_found.join(", ")}
           </p>
         </div>
       )}
 
-      {isUnified && (result.metrics_created ?? 0) > 0 && (
+      {(result.metrics_created ?? 0) > 0 && (
         <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 max-w-lg mx-auto">
           <p className="text-xs text-blue-700">
             {result.metrics_created} new metric{result.metrics_created !== 1 ? "s were" : " was"} detected and added to the system.
