@@ -11,13 +11,23 @@ from app.config import settings
 async def lifespan(app: FastAPI):
     # Seed default metrics on startup
     try:
+        from sqlalchemy import select
         from app.database import SessionLocal
+        from app.models import Company
         from app.seed.default_metrics import seed_default_metrics
         db = SessionLocal()
         try:
             added = seed_default_metrics(db)
             if added:
                 print(f"Seeded {added} default metric definitions")
+            # Rename "Default Company" to "Sephora" if it exists
+            default_co = db.scalar(
+                select(Company).where(Company.name == "Default Company")
+            )
+            if default_co:
+                default_co.name = "Sephora"
+                db.commit()
+                print("Renamed 'Default Company' to 'Sephora'")
         finally:
             db.close()
     except Exception as e:

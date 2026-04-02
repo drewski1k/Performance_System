@@ -110,7 +110,7 @@ async def execute_file_import(
     cycle: int | None = None,
     template_id: uuid.UUID | None = None,
     period_id: uuid.UUID | None = None,
-    company_name: str = "Default Company",
+    company_name: str = "Sephora",
     db: Session = Depends(get_db),
 ):
     """Upload and import a file."""
