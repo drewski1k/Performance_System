@@ -11,6 +11,11 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U perf_user -d performance_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   backend:
     build: ./backend
@@ -21,10 +26,11 @@ services:
       SECRET_KEY: dev-secret-key
       CORS_ORIGINS: http://localhost:5173
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     volumes:
       - ./backend:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: bash /app/start.sh
 
   frontend:
     build: ./frontend
@@ -34,6 +40,8 @@ services:
       - ./frontend:/app
       - /app/node_modules
     command: npm run dev -- --host 0.0.0.0
+    environment:
+      VITE_API_URL: http://backend:8000
 
 volumes:
   pgdata:
