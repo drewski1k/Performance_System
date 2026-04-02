@@ -176,6 +176,8 @@ export default function ScorecardConfigPage() {
   // ── Metrics local state ────────────────────────────────────────────────────
   const [editableMetrics, setEditableMetrics] = useState<EditableMetric[]>([]);
   const [metricsSaved, setMetricsSaved] = useState(false);
+  const [metricFilter, setMetricFilter] = useState("");
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
 
   // ── Custom metric form state ──────────────────────────────────────────────
   const [showCustomForm, setShowCustomForm] = useState(false);
@@ -777,7 +779,26 @@ export default function ScorecardConfigPage() {
                 Create a scorecard template to configure metrics
               </div>
             ) : (
-              <div className="space-y-6">
+              <div className="space-y-4">
+                {/* Search / filter bar */}
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    placeholder="Search metrics..."
+                    value={metricFilter}
+                    onChange={(e) => setMetricFilter(e.target.value)}
+                    className="flex-1 max-w-sm border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring placeholder:text-muted-foreground"
+                  />
+                  {metricFilter && (
+                    <button onClick={() => setMetricFilter("")} className="text-xs text-muted-foreground hover:text-foreground">
+                      Clear
+                    </button>
+                  )}
+                  <span className="text-xs text-muted-foreground ml-auto">
+                    {editableMetrics.length} metrics total
+                  </span>
+                </div>
+
                 {(() => {
                   const channelSections: { key: string; label: string; color: string; borderColor: string; bgColor: string; badgeColor: string }[] = [
                     { key: "__undefined__", label: "Undefined — Needs Configuration", color: "text-red-800", borderColor: "border-red-300", bgColor: "bg-red-50", badgeColor: "bg-red-100 text-red-700" },
@@ -788,13 +809,30 @@ export default function ScorecardConfigPage() {
                     { key: "channel", label: "Channel (General)", color: "text-teal-800", borderColor: "border-teal-200", bgColor: "bg-teal-50", badgeColor: "bg-teal-100 text-teal-700" },
                   ];
 
-                  // Group metrics by channel, preserving original index
-                  // Metrics with no channel (null/empty) go to __undefined__
+                  // Filter metrics by search term
+                  const filterLower = metricFilter.toLowerCase();
+                  const filtered = editableMetrics.map((m, i) => ({ metric: m, originalIndex: i }))
+                    .filter(({ metric: m }) =>
+                      !metricFilter ||
+                      m.metric_name.toLowerCase().includes(filterLower) ||
+                      (m.metric_display_name || "").toLowerCase().includes(filterLower) ||
+                      m.metric_key.toLowerCase().includes(filterLower)
+                    );
+
+                  // Group by channel, sort alphabetically within each group
                   const grouped = new Map<string, { metric: EditableMetric; originalIndex: number }[]>();
-                  editableMetrics.forEach((m, i) => {
+                  filtered.forEach(({ metric: m, originalIndex: i }) => {
                     const ch = (!m.channel || m.channel === "") ? "__undefined__" : m.channel;
                     if (!grouped.has(ch)) grouped.set(ch, []);
                     grouped.get(ch)!.push({ metric: m, originalIndex: i });
+                  });
+                  // Sort each group alphabetically by display name (fallback to metric name)
+                  grouped.forEach((items) => {
+                    items.sort((a, b) => {
+                      const nameA = (a.metric.metric_display_name || a.metric.metric_name).toLowerCase();
+                      const nameB = (b.metric.metric_display_name || b.metric.metric_name).toLowerCase();
+                      return nameA.localeCompare(nameB);
+                    });
                   });
 
                   // Collect any channels not in predefined list
@@ -813,18 +851,27 @@ export default function ScorecardConfigPage() {
                       const sectionMetrics = grouped.get(section.key)!;
                       return (
                         <div key={section.key} className={cn("rounded-lg border-2 overflow-hidden", section.borderColor)}>
-                          {/* Section header */}
-                          <div className={cn("px-4 py-2.5 flex items-center justify-between", section.bgColor)}>
+                          {/* Section header (click to collapse/expand) */}
+                          <button
+                            type="button"
+                            onClick={() => setCollapsedSections((prev) => {
+                              const next = new Set(prev);
+                              next.has(section.key) ? next.delete(section.key) : next.add(section.key);
+                              return next;
+                            })}
+                            className={cn("w-full px-4 py-2.5 flex items-center justify-between cursor-pointer hover:brightness-95 transition-all", section.bgColor)}
+                          >
                             <div className="flex items-center gap-2">
+                              <span className={cn("text-xs transition-transform", collapsedSections.has(section.key) ? "" : "rotate-90")}>&#9654;</span>
                               <h4 className={cn("text-sm font-semibold", section.color)}>{section.label}</h4>
                               <span className={cn("text-xs font-medium px-2 py-0.5 rounded-full", section.badgeColor)}>
                                 {sectionMetrics.length} metric{sectionMetrics.length !== 1 ? "s" : ""}
                               </span>
                             </div>
-                          </div>
+                          </button>
 
-                          {/* Section table */}
-                          <div className="overflow-x-auto">
+                          {/* Section table (collapsible) */}
+                          {!collapsedSections.has(section.key) && <div className="overflow-x-auto">
                             <table className="w-full text-sm">
                               <thead>
                                 <tr className="border-b border-border text-left">
@@ -1004,7 +1051,7 @@ export default function ScorecardConfigPage() {
                                 ))}
                               </tbody>
                             </table>
-                          </div>
+                          </div>}
                         </div>
                       );
                     });
