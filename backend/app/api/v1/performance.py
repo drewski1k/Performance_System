@@ -233,7 +233,6 @@ def _ensure_template_and_period(
             name=f"{company.name} Scorecard",
             channel_weight=Decimal("0"),
             non_channel_weight=Decimal("100"),
-            use_dynamic_thresholds=True,
             outlier_method="iqr",
             iqr_multiplier=Decimal("1.5"),
         )
