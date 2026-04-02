@@ -271,16 +271,16 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
         elif overall_channel is not None and ch_weight > 0:
             final_score = round(overall_channel * ch_weight / (ch_weight), 2)
 
-        # Final grade
+        # Final grade (matches Excel: A>=90, B>=75, C>=60, D>=40, F<40)
         final_grade = None
         if final_score is not None:
             if final_score >= 90:
                 final_grade = "A"
-            elif final_score >= 80:
+            elif final_score >= 75:
                 final_grade = "B"
-            elif final_score >= 70:
-                final_grade = "C"
             elif final_score >= 60:
+                final_grade = "C"
+            elif final_score >= 40:
                 final_grade = "D"
             else:
                 final_grade = "F"
