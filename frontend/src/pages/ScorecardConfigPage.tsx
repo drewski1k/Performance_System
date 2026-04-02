@@ -913,13 +913,21 @@ export default function ScorecardConfigPage() {
                                     <td className="px-4 py-2.5">
                                       <select
                                         value={m.channel || ""}
-                                        onChange={(e) => updateMetricField(i, "channel", e.target.value || null as any)}
+                                        onChange={(e) => {
+                                          const val = e.target.value || null;
+                                          updateMetricField(i, "channel", val as any);
+                                          api.patch(`/metrics/definitions/${m.metric_id}`, {
+                                            channel: val,
+                                          }).then(() => {
+                                            queryClient.invalidateQueries({ queryKey: ["scorecard-templates"] });
+                                          });
+                                        }}
                                         className={cn(
                                           "text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring",
                                           !m.channel && "text-red-600 border-red-300"
                                         )}
                                       >
-                                        {!m.channel && <option value="">-- Select Channel --</option>}
+                                        <option value="">-- Undefined --</option>
                                         <option value="voice">Voice</option>
                                         <option value="chat">Chat</option>
                                         <option value="email">Email</option>
