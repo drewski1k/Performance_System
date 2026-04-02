@@ -915,8 +915,18 @@ export default function ScorecardConfigPage() {
                                         onChange={(e) => {
                                           const val = e.target.value || null;
                                           updateMetricField(i, "channel", val as any);
+                                          if (!val) {
+                                            // Reset to defaults when returning to Undefined
+                                            updateMetricField(i, "include_in_score", false as any);
+                                            updateMetricField(i, "show_on_scorecard", false as any);
+                                            updateMetricField(i, "_weight", "0" as any);
+                                            updateMetricField(i, "_min_threshold", "" as any);
+                                            updateMetricField(i, "direction", "undefined" as any);
+                                            updateMetricField(i, "grade_mode", "dynamic" as any);
+                                          }
                                           api.patch(`/metrics/definitions/${m.metric_id}`, {
                                             channel: val,
+                                            ...(val ? {} : { direction: "undefined" }),
                                           }).then(() => {
                                             queryClient.invalidateQueries({ queryKey: ["scorecard-templates"] });
                                           });
