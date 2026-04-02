@@ -185,6 +185,8 @@ export default function ScorecardConfigPage() {
   const [customDirection, setCustomDirection] = useState("higher_better");
   const [customUnit, setCustomUnit] = useState("percent");
   const [customError, setCustomError] = useState("");
+  const [customValid, setCustomValid] = useState(false);
+  const [metricSearch, setMetricSearch] = useState("");
   const formulaRef = useRef<HTMLTextAreaElement>(null);
 
   const { data: metricKeys } = useQuery<{key: string; name: string; channel: string}[]>({
@@ -192,6 +194,45 @@ export default function ScorecardConfigPage() {
     queryFn: async () => { const r = await api.get("/metrics/definitions/keys"); return r.data; },
     enabled: showCustomForm,
   });
+
+  const filteredMetricKeys = metricKeys?.filter(
+    (mk) =>
+      mk.key.toLowerCase().includes(metricSearch.toLowerCase()) ||
+      mk.name.toLowerCase().includes(metricSearch.toLowerCase())
+  ) ?? [];
+
+  // Live formula validation
+  const validateMutation = useMutation({
+    mutationFn: async (formula: string) => {
+      const r = await api.post("/metrics/definitions/validate-formula", { formula });
+      return r.data;
+    },
+    onSuccess: (data) => {
+      if (data.valid) {
+        setCustomError("");
+        setCustomValid(true);
+      } else {
+        setCustomError(data.error || "Invalid formula");
+        setCustomValid(false);
+      }
+    },
+    onError: () => {
+      setCustomValid(false);
+    },
+  });
+
+  // Debounced formula validation
+  const validateTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  function handleFormulaChange(val: string) {
+    setCustomFormula(val);
+    setCustomValid(false);
+    if (validateTimeoutRef.current) clearTimeout(validateTimeoutRef.current);
+    if (val.trim()) {
+      validateTimeoutRef.current = setTimeout(() => validateMutation.mutate(val), 600);
+    } else {
+      setCustomError("");
+    }
+  }
 
   const customMetricMutation = useMutation({
     mutationFn: async () => {
@@ -518,143 +559,214 @@ export default function ScorecardConfigPage() {
 
             {/* Custom Metric Creator Form */}
             {showCustomForm && (
-              <div className="mb-6 p-4 rounded-lg border border-indigo-200 bg-indigo-50/50 space-y-4">
-                <h4 className="text-sm font-semibold text-indigo-900">Create Custom Metric</h4>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Name */}
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">Name</label>
-                    <input
-                      type="text"
-                      value={customName}
-                      onChange={(e) => {
-                        setCustomName(e.target.value);
-                        setCustomKey(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""));
-                      }}
-                      placeholder="e.g. Total Availability Rate"
-                      className="mt-1 w-full border border-input rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-                    />
+              <div className="mb-6 rounded-xl border-2 border-indigo-200 bg-gradient-to-br from-indigo-50/80 to-white overflow-hidden">
+                {/* Form header */}
+                <div className="px-5 py-3 bg-indigo-600 text-white flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Plus className="h-4 w-4" />
+                    <span className="font-semibold text-sm">Create Custom Metric</span>
                   </div>
-
-                  {/* Key */}
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">Key (auto-generated)</label>
-                    <input
-                      type="text"
-                      value={customKey}
-                      onChange={(e) => setCustomKey(e.target.value)}
-                      placeholder="total_availability_rate"
-                      className="mt-1 w-full border border-input rounded-md px-3 py-2 text-sm bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring"
-                    />
-                  </div>
+                  <button onClick={() => { setShowCustomForm(false); setCustomError(""); }} className="hover:bg-white/20 rounded p-1 transition-colors">
+                    <X className="h-4 w-4" />
+                  </button>
                 </div>
 
-                {/* Formula + Metric Keys */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="md:col-span-2">
-                    <label className="text-xs font-medium text-muted-foreground">
-                      Formula (use metric keys, +, -, *, /, parentheses)
-                    </label>
-                    <textarea
-                      ref={formulaRef}
-                      value={customFormula}
-                      onChange={(e) => setCustomFormula(e.target.value)}
-                      placeholder="e.g. (voice_avail_time + chat_avail_time) / total_logged_time * 100"
-                      rows={3}
-                      className="mt-1 w-full border border-input rounded-md px-3 py-2 text-sm bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring resize-none"
-                    />
-                  </div>
-
-                  {/* Available Metric Keys */}
+                <div className="p-5 space-y-5">
+                  {/* Step 1: Name */}
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground">
-                      Available Metrics (click to insert)
-                    </label>
-                    <div className="mt-1 max-h-[108px] overflow-y-auto border border-input rounded-md bg-background p-1.5 space-y-0.5">
-                      {metricKeys?.map((mk) => (
-                        <button
-                          key={mk.key}
-                          type="button"
-                          onClick={() => insertMetricKey(mk.key)}
-                          className="block w-full text-left text-xs px-2 py-1 rounded hover:bg-muted font-mono truncate transition-colors"
-                          title={`${mk.name} (${mk.channel})`}
-                        >
-                          {mk.key}
-                        </button>
-                      )) ?? (
-                        <span className="text-xs text-muted-foreground px-2">Loading...</span>
-                      )}
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="flex items-center justify-center h-5 w-5 rounded-full bg-indigo-600 text-white text-xs font-bold">1</span>
+                      <label className="text-sm font-semibold">Name your metric</label>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <input
+                        type="text"
+                        value={customName}
+                        onChange={(e) => {
+                          setCustomName(e.target.value);
+                          setCustomKey(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""));
+                        }}
+                        placeholder="e.g. Total Availability Rate"
+                        className="border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                      />
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">Key:</span>
+                        <code className="text-xs font-mono bg-gray-100 px-2 py-1.5 rounded border border-input flex-1 overflow-hidden text-ellipsis">
+                          {customKey || "auto_generated_key"}
+                        </code>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Options row */}
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  {/* Step 2: Formula Builder */}
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground">Channel</label>
-                    <select
-                      value={customChannel}
-                      onChange={(e) => setCustomChannel(e.target.value)}
-                      className="mt-1 w-full border border-input rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-                    >
-                      <option value="non_channel">Non-Channel</option>
-                      <option value="channel">Channel</option>
-                      <option value="voice">Voice</option>
-                      <option value="chat">Chat</option>
-                      <option value="email">Email</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">Direction</label>
-                    <select
-                      value={customDirection}
-                      onChange={(e) => setCustomDirection(e.target.value)}
-                      className="mt-1 w-full border border-input rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-                    >
-                      <option value="higher_better">Higher is Better</option>
-                      <option value="lower_better">Lower is Better</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground">Unit</label>
-                    <select
-                      value={customUnit}
-                      onChange={(e) => setCustomUnit(e.target.value)}
-                      className="mt-1 w-full border border-input rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-                    >
-                      <option value="percent">Percent</option>
-                      <option value="ratio">Ratio</option>
-                      <option value="seconds">Seconds</option>
-                      <option value="count">Count</option>
-                      <option value="currency">Currency</option>
-                    </select>
-                  </div>
-                </div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="flex items-center justify-center h-5 w-5 rounded-full bg-indigo-600 text-white text-xs font-bold">2</span>
+                      <label className="text-sm font-semibold">Build your formula</label>
+                    </div>
 
-                {/* Error + Create button */}
-                {customError && (
-                  <div className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{customError}</div>
-                )}
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => customMetricMutation.mutate()}
-                    disabled={!customName || !customKey || !customFormula || customMetricMutation.isPending}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-                  >
-                    {customMetricMutation.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Plus className="h-4 w-4" />
+                    {/* Operator buttons */}
+                    <div className="flex items-center gap-1.5 mb-2">
+                      <span className="text-xs text-muted-foreground mr-1">Operators:</span>
+                      {["+", "-", "*", "/", "(", ")"].map((op) => (
+                        <button
+                          key={op}
+                          type="button"
+                          onClick={() => insertMetricKey(op === "(" || op === ")" ? op : ` ${op} `)}
+                          className="h-8 w-8 flex items-center justify-center rounded-md bg-white border border-gray-300 text-sm font-bold hover:bg-indigo-50 hover:border-indigo-300 transition-colors shadow-sm"
+                        >
+                          {op}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => insertMetricKey("100")}
+                        className="h-8 px-2 flex items-center justify-center rounded-md bg-white border border-gray-300 text-xs font-mono hover:bg-indigo-50 hover:border-indigo-300 transition-colors shadow-sm"
+                      >
+                        100
+                      </button>
+                      <div className="ml-auto flex items-center gap-1.5">
+                        {customFormula && validateMutation.isPending && (
+                          <span className="text-xs text-muted-foreground flex items-center gap-1">
+                            <Loader2 className="h-3 w-3 animate-spin" /> Validating...
+                          </span>
+                        )}
+                        {customFormula && customValid && !validateMutation.isPending && (
+                          <span className="text-xs text-emerald-600 flex items-center gap-1 bg-emerald-50 px-2 py-1 rounded-md">
+                            <CheckCircle2 className="h-3 w-3" /> Valid formula
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      {/* Formula textarea */}
+                      <div className="md:col-span-2">
+                        <textarea
+                          ref={formulaRef}
+                          value={customFormula}
+                          onChange={(e) => handleFormulaChange(e.target.value)}
+                          placeholder="Click metrics and operators to build, or type directly...&#10;&#10;Example: (voice_avail_time + chat_avail_time) / total_logged_time * 100"
+                          rows={4}
+                          className={cn(
+                            "w-full border rounded-lg px-3 py-2 text-sm bg-white font-mono focus:outline-none focus:ring-2 resize-none",
+                            customError ? "border-red-300 focus:ring-red-200" :
+                            customValid ? "border-emerald-300 focus:ring-emerald-200" :
+                            "border-input focus:ring-indigo-200"
+                          )}
+                        />
+                        {customError && (
+                          <p className="mt-1 text-xs text-red-600">{customError}</p>
+                        )}
+                      </div>
+
+                      {/* Metric picker */}
+                      <div className="border border-input rounded-lg bg-white overflow-hidden flex flex-col">
+                        <div className="px-2 py-1.5 border-b border-input bg-gray-50">
+                          <input
+                            type="text"
+                            value={metricSearch}
+                            onChange={(e) => setMetricSearch(e.target.value)}
+                            placeholder="Search metrics..."
+                            className="w-full text-xs bg-transparent focus:outline-none"
+                          />
+                        </div>
+                        <div className="flex-1 overflow-y-auto max-h-[120px] p-1">
+                          {filteredMetricKeys.map((mk) => (
+                            <button
+                              key={mk.key}
+                              type="button"
+                              onClick={() => { insertMetricKey(mk.key); setMetricSearch(""); }}
+                              className="w-full text-left px-2 py-1.5 rounded text-xs hover:bg-indigo-50 transition-colors group"
+                              title={mk.name}
+                            >
+                              <span className="font-mono text-indigo-700 group-hover:text-indigo-900">{mk.key}</span>
+                              <span className="text-muted-foreground ml-1.5 hidden sm:inline">{mk.name}</span>
+                            </button>
+                          ))}
+                          {filteredMetricKeys.length === 0 && (
+                            <span className="text-xs text-muted-foreground px-2 py-2 block">
+                              {metricKeys ? "No matches" : "Loading..."}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Step 3: Settings */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="flex items-center justify-center h-5 w-5 rounded-full bg-indigo-600 text-white text-xs font-bold">3</span>
+                      <label className="text-sm font-semibold">Configure settings</label>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">Channel</label>
+                        <select
+                          value={customChannel}
+                          onChange={(e) => setCustomChannel(e.target.value)}
+                          className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                        >
+                          <option value="non_channel">Non-Channel</option>
+                          <option value="channel">Channel</option>
+                          <option value="voice">Voice</option>
+                          <option value="chat">Chat</option>
+                          <option value="email">Email</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">Direction</label>
+                        <select
+                          value={customDirection}
+                          onChange={(e) => setCustomDirection(e.target.value)}
+                          className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                        >
+                          <option value="higher_better">Higher is Better</option>
+                          <option value="lower_better">Lower is Better</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground mb-1 block">Unit</label>
+                        <select
+                          value={customUnit}
+                          onChange={(e) => setCustomUnit(e.target.value)}
+                          className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                        >
+                          <option value="percent">Percent (%)</option>
+                          <option value="ratio">Ratio</option>
+                          <option value="seconds">Seconds</option>
+                          <option value="count">Count</option>
+                          <option value="currency">Currency ($)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action row */}
+                  <div className="flex items-center gap-3 pt-2 border-t border-indigo-100">
+                    <button
+                      onClick={() => customMetricMutation.mutate()}
+                      disabled={!customName || !customKey || !customFormula || !customValid || customMetricMutation.isPending}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
+                    >
+                      {customMetricMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4" />
+                      )}
+                      Create Metric
+                    </button>
+                    <button
+                      onClick={() => { setShowCustomForm(false); setCustomError(""); setCustomValid(false); setMetricSearch(""); }}
+                      className="px-4 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-gray-100 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    {!customValid && customFormula && !validateMutation.isPending && !customError && (
+                      <span className="text-xs text-muted-foreground">Formula validation in progress...</span>
                     )}
-                    Create Custom Metric
-                  </button>
-                  <button
-                    onClick={() => { setShowCustomForm(false); setCustomError(""); }}
-                    className="px-4 py-2 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors"
-                  >
-                    Cancel
-                  </button>
+                  </div>
                 </div>
               </div>
             )}
