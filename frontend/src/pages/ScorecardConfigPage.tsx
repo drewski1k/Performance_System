@@ -771,179 +771,218 @@ export default function ScorecardConfigPage() {
               </div>
             )}
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border text-left">
-                    <th className="pb-3 font-medium text-muted-foreground pr-4">Metric</th>
-                    <th className="pb-3 font-medium text-muted-foreground pr-4">Channel</th>
-                    <th className="pb-3 font-medium text-muted-foreground pr-4">Weight %</th>
-                    <th className="pb-3 font-medium text-muted-foreground pr-4">Direction</th>
-                    <th className="pb-3 font-medium text-muted-foreground pr-4">Include in Score</th>
-                    <th className="pb-3 font-medium text-muted-foreground pr-4">Show on Scorecard</th>
-                    <th className="pb-3 font-medium text-muted-foreground pr-4">Min Threshold</th>
-                    <th className="pb-3 font-medium text-muted-foreground">Grade Mode</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {editableMetrics.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="py-8 text-center text-muted-foreground">
-                        Create a scorecard template to configure metrics
-                      </td>
-                    </tr>
-                  ) : (
-                    editableMetrics.map((m, i) => (
-                      <tr key={m.id ?? i}>
-                        <td className="py-2.5 font-medium pr-4">{m.metric_name}</td>
-                        <td className="py-2.5 text-muted-foreground pr-4">{m.channel ?? "All"}</td>
+            {editableMetrics.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground">
+                Create a scorecard template to configure metrics
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {(() => {
+                  const channelSections: { key: string; label: string; color: string; borderColor: string; bgColor: string; badgeColor: string }[] = [
+                    { key: "voice", label: "Voice", color: "text-blue-800", borderColor: "border-blue-200", bgColor: "bg-blue-50", badgeColor: "bg-blue-100 text-blue-700" },
+                    { key: "chat", label: "Chat", color: "text-purple-800", borderColor: "border-purple-200", bgColor: "bg-purple-50", badgeColor: "bg-purple-100 text-purple-700" },
+                    { key: "email", label: "Email", color: "text-amber-800", borderColor: "border-amber-200", bgColor: "bg-amber-50", badgeColor: "bg-amber-100 text-amber-700" },
+                    { key: "non_channel", label: "Non-Channel", color: "text-slate-800", borderColor: "border-slate-200", bgColor: "bg-slate-50", badgeColor: "bg-slate-100 text-slate-700" },
+                    { key: "channel", label: "Channel (General)", color: "text-teal-800", borderColor: "border-teal-200", bgColor: "bg-teal-50", badgeColor: "bg-teal-100 text-teal-700" },
+                  ];
 
-                        {/* Weight */}
-                        <td className="py-2.5 pr-4">
-                          <input
-                            type="number"
-                            min="0"
-                            max="100"
-                            step="0.1"
-                            value={m._weight}
-                            onChange={(e) => updateMetricField(i, "_weight", e.target.value)}
-                            className="w-20 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-                          />
-                        </td>
+                  // Group metrics by channel, preserving original index
+                  const grouped = new Map<string, { metric: EditableMetric; originalIndex: number }[]>();
+                  editableMetrics.forEach((m, i) => {
+                    const ch = m.channel ?? "non_channel";
+                    if (!grouped.has(ch)) grouped.set(ch, []);
+                    grouped.get(ch)!.push({ metric: m, originalIndex: i });
+                  });
 
-                        {/* Direction (editable dropdown) */}
-                        <td className="py-2.5 pr-4">
-                          <select
-                            value={m.direction}
-                            onChange={(e) => {
-                              updateMetricField(i, "direction", e.target.value);
-                              // Also patch the metric definition on the backend
-                              api.patch(`/metrics/definitions/${m.metric_id}`, {
-                                direction: e.target.value,
-                              }).then(() => {
-                                queryClient.invalidateQueries({ queryKey: ["scorecard-templates"] });
-                              });
-                            }}
-                            className={cn(
-                              "text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring",
-                              m.direction === "higher_better"
-                                ? "text-emerald-700"
-                                : "text-amber-700"
-                            )}
-                          >
-                            <option value="higher_better">Higher ▲</option>
-                            <option value="lower_better">Lower ▼</option>
-                          </select>
-                        </td>
+                  // Collect any channels not in predefined list
+                  const extraChannels = [...grouped.keys()].filter((k) => !channelSections.some((s) => s.key === k));
+                  const allSections = [
+                    ...channelSections,
+                    ...extraChannels.map((k) => ({
+                      key: k, label: k.charAt(0).toUpperCase() + k.slice(1),
+                      color: "text-gray-800", borderColor: "border-gray-200", bgColor: "bg-gray-50", badgeColor: "bg-gray-100 text-gray-700",
+                    })),
+                  ];
 
-                        {/* Include in Score toggle */}
-                        <td className="py-2.5 pr-4">
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={m.include_in_score}
-                              onChange={(e) =>
-                                updateMetricField(i, "include_in_score", e.target.checked)
-                              }
-                              className="h-4 w-4 rounded border-input accent-primary"
-                            />
-                            <span
-                              className={cn(
-                                "text-xs px-2 py-0.5 rounded select-none",
-                                m.include_in_score
-                                  ? "bg-emerald-50 text-emerald-700"
-                                  : "bg-gray-100 text-gray-500"
-                              )}
-                            >
-                              {m.include_in_score ? "Yes" : "No"}
-                            </span>
-                          </label>
-                        </td>
-
-                        {/* Show on Scorecard toggle */}
-                        <td className="py-2.5 pr-4">
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={m.show_on_scorecard}
-                              onChange={(e) =>
-                                updateMetricField(i, "show_on_scorecard", e.target.checked)
-                              }
-                              className="h-4 w-4 rounded border-input accent-primary"
-                            />
-                            <span
-                              className={cn(
-                                "text-xs px-2 py-0.5 rounded select-none",
-                                m.show_on_scorecard
-                                  ? "bg-emerald-50 text-emerald-700"
-                                  : "bg-gray-100 text-gray-500"
-                              )}
-                            >
-                              {m.show_on_scorecard ? "Yes" : "No"}
-                            </span>
-                          </label>
-                        </td>
-
-                        {/* Min Threshold */}
-                        <td className="py-2.5 pr-4">
-                          <input
-                            type="number"
-                            step="any"
-                            value={m._min_threshold}
-                            placeholder="—"
-                            onChange={(e) =>
-                              updateMetricField(i, "_min_threshold", e.target.value)
-                            }
-                            className="w-24 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
-                          />
-                        </td>
-
-                        {/* Grade Mode */}
-                        <td className="py-2.5">
-                          <select
-                            value={m.grade_mode ?? "dynamic"}
-                            onChange={(e) => updateMetricField(i, "grade_mode", e.target.value)}
-                            className={cn(
-                              "text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring",
-                              (m.grade_mode ?? "dynamic") === "dynamic" ? "text-blue-700" : "text-purple-700"
-                            )}
-                          >
-                            <option value="dynamic">Dynamic</option>
-                            <option value="manual">Manual</option>
-                          </select>
-                          {(m.grade_mode === "manual") && (
-                            <div className="flex gap-1 mt-1.5">
-                              {(["grade_a", "grade_b", "grade_c", "grade_d"] as const).map((g) => (
-                                <div key={g} className="flex flex-col items-center">
-                                  <span className="text-[10px] text-muted-foreground font-medium">
-                                    {g.replace("grade_", "").toUpperCase()}
-                                  </span>
-                                  <input
-                                    type="number"
-                                    step="any"
-                                    value={m.manual_thresholds?.[g] ?? ""}
-                                    placeholder="—"
-                                    onChange={(e) => {
-                                      const val = e.target.value === "" ? null : Number(e.target.value);
-                                      const updated = { ...m.manual_thresholds, [g]: val };
-                                      updateMetricField(i, "manual_thresholds", updated as Record<string, number>);
-                                    }}
-                                    className="w-16 border border-input rounded px-1 py-0.5 text-xs bg-background text-center focus:outline-none focus:ring-1 focus:ring-ring"
-                                  />
-                                </div>
-                              ))}
+                  return allSections
+                    .filter((section) => grouped.has(section.key) && grouped.get(section.key)!.length > 0)
+                    .map((section) => {
+                      const sectionMetrics = grouped.get(section.key)!;
+                      return (
+                        <div key={section.key} className={cn("rounded-lg border-2 overflow-hidden", section.borderColor)}>
+                          {/* Section header */}
+                          <div className={cn("px-4 py-2.5 flex items-center justify-between", section.bgColor)}>
+                            <div className="flex items-center gap-2">
+                              <h4 className={cn("text-sm font-semibold", section.color)}>{section.label}</h4>
+                              <span className={cn("text-xs font-medium px-2 py-0.5 rounded-full", section.badgeColor)}>
+                                {sectionMetrics.length} metric{sectionMetrics.length !== 1 ? "s" : ""}
+                              </span>
                             </div>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                          </div>
 
-            {/* Bottom save button for long tables */}
-            {editableMetrics.length > 5 && template && (
+                          {/* Section table */}
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="border-b border-border text-left">
+                                  <th className="px-4 py-2 font-medium text-muted-foreground">Metric</th>
+                                  <th className="px-4 py-2 font-medium text-muted-foreground">Channel</th>
+                                  <th className="px-4 py-2 font-medium text-muted-foreground">Weight %</th>
+                                  <th className="px-4 py-2 font-medium text-muted-foreground">Direction</th>
+                                  <th className="px-4 py-2 font-medium text-muted-foreground">Include</th>
+                                  <th className="px-4 py-2 font-medium text-muted-foreground">Show</th>
+                                  <th className="px-4 py-2 font-medium text-muted-foreground">Min Threshold</th>
+                                  <th className="px-4 py-2 font-medium text-muted-foreground">Grade Mode</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border">
+                                {sectionMetrics.map(({ metric: m, originalIndex: i }) => (
+                                  <tr key={m.id ?? i} className="hover:bg-muted/30 transition-colors">
+                                    <td className="px-4 py-2.5 font-medium">{m.metric_name}</td>
+
+                                    {/* Channel (editable — change moves metric to different section) */}
+                                    <td className="px-4 py-2.5">
+                                      <select
+                                        value={m.channel ?? "non_channel"}
+                                        onChange={(e) => updateMetricField(i, "channel", e.target.value)}
+                                        className="text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring"
+                                      >
+                                        <option value="voice">Voice</option>
+                                        <option value="chat">Chat</option>
+                                        <option value="email">Email</option>
+                                        <option value="non_channel">Non-Channel</option>
+                                        <option value="channel">Channel</option>
+                                      </select>
+                                    </td>
+
+                                    {/* Weight */}
+                                    <td className="px-4 py-2.5">
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        max="100"
+                                        step="0.1"
+                                        value={m._weight}
+                                        onChange={(e) => updateMetricField(i, "_weight", e.target.value)}
+                                        className="w-20 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                                      />
+                                    </td>
+
+                                    {/* Direction */}
+                                    <td className="px-4 py-2.5">
+                                      <select
+                                        value={m.direction}
+                                        onChange={(e) => {
+                                          updateMetricField(i, "direction", e.target.value);
+                                          api.patch(`/metrics/definitions/${m.metric_id}`, {
+                                            direction: e.target.value,
+                                          }).then(() => {
+                                            queryClient.invalidateQueries({ queryKey: ["scorecard-templates"] });
+                                          });
+                                        }}
+                                        className={cn(
+                                          "text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring",
+                                          m.direction === "higher_better" ? "text-emerald-700" : "text-amber-700"
+                                        )}
+                                      >
+                                        <option value="higher_better">Higher ▲</option>
+                                        <option value="lower_better">Lower ▼</option>
+                                      </select>
+                                    </td>
+
+                                    {/* Include in Score */}
+                                    <td className="px-4 py-2.5">
+                                      <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                          type="checkbox"
+                                          checked={m.include_in_score}
+                                          onChange={(e) => updateMetricField(i, "include_in_score", e.target.checked)}
+                                          className="h-4 w-4 rounded border-input accent-primary"
+                                        />
+                                        <span className={cn("text-xs px-2 py-0.5 rounded select-none", m.include_in_score ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500")}>
+                                          {m.include_in_score ? "Yes" : "No"}
+                                        </span>
+                                      </label>
+                                    </td>
+
+                                    {/* Show on Scorecard */}
+                                    <td className="px-4 py-2.5">
+                                      <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                          type="checkbox"
+                                          checked={m.show_on_scorecard}
+                                          onChange={(e) => updateMetricField(i, "show_on_scorecard", e.target.checked)}
+                                          className="h-4 w-4 rounded border-input accent-primary"
+                                        />
+                                        <span className={cn("text-xs px-2 py-0.5 rounded select-none", m.show_on_scorecard ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500")}>
+                                          {m.show_on_scorecard ? "Yes" : "No"}
+                                        </span>
+                                      </label>
+                                    </td>
+
+                                    {/* Min Threshold */}
+                                    <td className="px-4 py-2.5">
+                                      <input
+                                        type="number"
+                                        step="any"
+                                        value={m._min_threshold}
+                                        placeholder="—"
+                                        onChange={(e) => updateMetricField(i, "_min_threshold", e.target.value)}
+                                        className="w-24 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                                      />
+                                    </td>
+
+                                    {/* Grade Mode */}
+                                    <td className="px-4 py-2.5">
+                                      <select
+                                        value={m.grade_mode ?? "dynamic"}
+                                        onChange={(e) => updateMetricField(i, "grade_mode", e.target.value)}
+                                        className={cn(
+                                          "text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring",
+                                          (m.grade_mode ?? "dynamic") === "dynamic" ? "text-blue-700" : "text-purple-700"
+                                        )}
+                                      >
+                                        <option value="dynamic">Dynamic</option>
+                                        <option value="manual">Manual</option>
+                                      </select>
+                                      {(m.grade_mode === "manual") && (
+                                        <div className="flex gap-1 mt-1.5">
+                                          {(["grade_a", "grade_b", "grade_c", "grade_d"] as const).map((g) => (
+                                            <div key={g} className="flex flex-col items-center">
+                                              <span className="text-[10px] text-muted-foreground font-medium">
+                                                {g.replace("grade_", "").toUpperCase()}
+                                              </span>
+                                              <input
+                                                type="number"
+                                                step="any"
+                                                value={m.manual_thresholds?.[g] ?? ""}
+                                                placeholder="—"
+                                                onChange={(e) => {
+                                                  const val = e.target.value === "" ? null : Number(e.target.value);
+                                                  const updated = { ...m.manual_thresholds, [g]: val };
+                                                  updateMetricField(i, "manual_thresholds", updated as Record<string, number>);
+                                                }}
+                                                className="w-16 border border-input rounded px-1 py-0.5 text-xs bg-background text-center focus:outline-none focus:ring-1 focus:ring-ring"
+                                              />
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    });
+                })()}
+              </div>
+            )}
+
+            {/* Bottom save button */}
+            {editableMetrics.length > 0 && template && (
               <div className="flex items-center gap-3 mt-4 pt-4 border-t border-border">
                 {metricsSaved && <SuccessBanner message="Metrics saved" />}
                 <SaveButton
