@@ -322,7 +322,8 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
         prod_raw = _get_context_value(recs, sm_lookup, "productivity_pct")
 
         if len(agent_scores) == 0:
-            log.warning(f"[SCORING] First agent: channel_grades={{{k}: {len(v)} for k, v in channel_grades.items()}}}, "
+            ch_summary = {k: len(v) for k, v in channel_grades.items()}
+            log.warning(f"[SCORING] First agent: channel_grades={ch_summary}, "
                         f"non_channel_grades={len(non_channel_grades)}, "
                         f"voice={voice_score}, chat={chat_score}, email={email_score}, "
                         f"overall_channel={overall_channel}, non_channel={non_channel_score}, "
