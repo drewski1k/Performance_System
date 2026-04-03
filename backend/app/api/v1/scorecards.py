@@ -145,33 +145,61 @@ def update_template(template_id: uuid.UUID, data: ScorecardTemplateUpdate, db: S
             setattr(template, field, value)
 
     if data.metrics is not None:
-        # Replace all metrics
+        # Update existing metrics in place to preserve IDs (PerformanceRecords reference them)
+        existing_by_metric_id = {sm.metric_id: sm for sm in template.metrics}
+        incoming_metric_ids = {mc.metric_id for mc in data.metrics}
+
+        # Delete metrics that are no longer in the list
         for sm in template.metrics:
-            db.delete(sm)
+            if sm.metric_id not in incoming_metric_ids:
+                db.delete(sm)
         db.flush()
 
         for mc in data.metrics:
-            sm = ScorecardMetric(
-                template_id=template.id,
-                metric_id=mc.metric_id,
-                weight=mc.weight,
-                include_in_score=mc.include_in_score,
-                show_on_scorecard=mc.show_on_scorecard,
-                min_threshold=mc.min_threshold,
-                threshold_basis=mc.threshold_basis,
-                grade_mode=mc.grade_mode,
-                sort_order=mc.sort_order,
-            )
-            db.add(sm)
-            db.flush()
+            existing_sm = existing_by_metric_id.get(mc.metric_id)
+            if existing_sm:
+                # Update in place — preserves the ScorecardMetric ID
+                existing_sm.weight = mc.weight
+                existing_sm.include_in_score = mc.include_in_score
+                existing_sm.show_on_scorecard = mc.show_on_scorecard
+                existing_sm.min_threshold = mc.min_threshold
+                existing_sm.threshold_basis = mc.threshold_basis
+                existing_sm.grade_mode = mc.grade_mode
+                existing_sm.sort_order = mc.sort_order
+                sm = existing_sm
+            else:
+                # New metric — create fresh
+                sm = ScorecardMetric(
+                    template_id=template.id,
+                    metric_id=mc.metric_id,
+                    weight=mc.weight,
+                    include_in_score=mc.include_in_score,
+                    show_on_scorecard=mc.show_on_scorecard,
+                    min_threshold=mc.min_threshold,
+                    threshold_basis=mc.threshold_basis,
+                    grade_mode=mc.grade_mode,
+                    sort_order=mc.sort_order,
+                )
+                db.add(sm)
+                db.flush()
+
+            # Handle manual thresholds
             if mc.manual_thresholds:
-                db.add(ManualGradeThreshold(
-                    scorecard_metric_id=sm.id,
-                    grade_a=mc.manual_thresholds.grade_a,
-                    grade_b=mc.manual_thresholds.grade_b,
-                    grade_c=mc.manual_thresholds.grade_c,
-                    grade_d=mc.manual_thresholds.grade_d,
-                ))
+                if sm.manual_thresholds:
+                    sm.manual_thresholds.grade_a = mc.manual_thresholds.grade_a
+                    sm.manual_thresholds.grade_b = mc.manual_thresholds.grade_b
+                    sm.manual_thresholds.grade_c = mc.manual_thresholds.grade_c
+                    sm.manual_thresholds.grade_d = mc.manual_thresholds.grade_d
+                else:
+                    db.add(ManualGradeThreshold(
+                        scorecard_metric_id=sm.id,
+                        grade_a=mc.manual_thresholds.grade_a,
+                        grade_b=mc.manual_thresholds.grade_b,
+                        grade_c=mc.manual_thresholds.grade_c,
+                        grade_d=mc.manual_thresholds.grade_d,
+                    ))
+            elif sm.manual_thresholds:
+                db.delete(sm.manual_thresholds)
 
     db.commit()
     return _template_to_out(_load_template(db, template.id))

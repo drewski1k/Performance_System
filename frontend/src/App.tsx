@@ -9,6 +9,7 @@ import ImportPage from "@/pages/ImportPage";
 import ReportsPage from "@/pages/ReportsPage";
 import PfpPage from "@/pages/PfpPage";
 import AgentsPage from "@/pages/AgentsPage";
+import AgentDetailPage from "@/pages/AgentDetailPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,6 +31,7 @@ export default function App() {
               <Route path="reports" element={<ReportsPage />} />
               <Route path="pfp" element={<PfpPage />} />
               <Route path="agents" element={<AgentsPage />} />
+              <Route path="agents/:agentId" element={<AgentDetailPage />} />
             </Route>
           </Routes>
         </BrowserRouter>
