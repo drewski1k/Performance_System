@@ -247,13 +247,35 @@ def update_productivity_states(template_id: uuid.UUID, states: list[Productivity
 
 # --- PFP Config ---
 
-@router.get("/templates/{template_id}/pfp", response_model=PfpConfigOut | None)
+def _pfp_to_out(config: PfpConfig) -> dict:
+    """Convert PfpConfig to response dict with hours_metric_name."""
+    from app.models import MetricDefinition
+    data = {
+        "id": config.id,
+        "template_id": config.template_id,
+        "grade_a_rate": config.grade_a_rate,
+        "grade_b_rate": config.grade_b_rate,
+        "grade_c_rate": config.grade_c_rate,
+        "grade_d_rate": config.grade_d_rate,
+        "grade_f_rate": config.grade_f_rate,
+        "hours_metric_id": config.hours_metric_id,
+        "hours_unit": config.hours_unit or "seconds",
+        "hours_metric_name": None,
+    }
+    if config.hours_metric:
+        data["hours_metric_name"] = config.hours_metric.display_name or config.hours_metric.name
+    return data
+
+
+@router.get("/templates/{template_id}/pfp")
 def get_pfp_config(template_id: uuid.UUID, db: Session = Depends(get_db)):
     config = db.scalar(select(PfpConfig).where(PfpConfig.template_id == template_id))
-    return config
+    if not config:
+        return None
+    return _pfp_to_out(config)
 
 
-@router.put("/templates/{template_id}/pfp", response_model=PfpConfigOut)
+@router.put("/templates/{template_id}/pfp")
 def update_pfp_config(template_id: uuid.UUID, data: PfpConfigSchema, db: Session = Depends(get_db)):
     if not db.get(ScorecardTemplate, template_id):
         raise HTTPException(404, "Template not found")
@@ -266,4 +288,4 @@ def update_pfp_config(template_id: uuid.UUID, data: PfpConfigSchema, db: Session
         db.add(config)
     db.commit()
     db.refresh(config)
-    return config
+    return _pfp_to_out(config)

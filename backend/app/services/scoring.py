@@ -303,9 +303,21 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
             else:
                 final_grade = "F"
 
-        # Logged hours (from total_logged_time metric, converted from seconds)
-        logged_seconds = _get_context_value(recs, sm_lookup, "total_logged_time")
-        logged_hours = round(logged_seconds / 3600, 2) if logged_seconds > 0 else 0
+        # Logged hours — use configured hours metric or fall back to total_logged_time
+        hours_raw = 0.0
+        if pfp_config and pfp_config.hours_metric_id:
+            hours_raw = _get_hours_value(recs, sm_lookup, pfp_config.hours_metric_id)
+            hours_unit = pfp_config.hours_unit or "seconds"
+        else:
+            hours_raw = _get_context_value(recs, sm_lookup, "total_logged_time")
+            hours_unit = "seconds"
+
+        if hours_unit == "seconds":
+            logged_hours = round(hours_raw / 3600, 2) if hours_raw > 0 else 0
+        elif hours_unit == "minutes":
+            logged_hours = round(hours_raw / 60, 2) if hours_raw > 0 else 0
+        else:  # "hours"
+            logged_hours = round(hours_raw, 2) if hours_raw > 0 else 0
 
         # PFP
         pfp_rate = pfp_rates.get(final_grade, 0) if final_grade else 0
@@ -469,6 +481,19 @@ def _get_context_value(
     for sm_id, rec in recs.items():
         sm = sm_lookup.get(sm_id)
         if sm and sm.metric and sm.metric.key == metric_key:
+            return float(rec.actual_value)
+    return 0.0
+
+
+def _get_hours_value(
+    recs: dict[uuid.UUID, PerformanceRecord],
+    sm_lookup: dict[uuid.UUID, ScorecardMetric],
+    metric_id: uuid.UUID,
+) -> float:
+    """Get a metric value by metric_definition ID from an agent's records."""
+    for sm_id, rec in recs.items():
+        sm = sm_lookup.get(sm_id)
+        if sm and sm.metric_id == metric_id:
             return float(rec.actual_value)
     return 0.0
 

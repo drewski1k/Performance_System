@@ -87,6 +87,8 @@ interface PfpConfig {
   grade_c_rate: number;
   grade_d_rate: number;
   grade_f_rate: number;
+  hours_metric_id: string | null;
+  hours_unit: string;
 }
 
 // ── Editable metric row type (what we track in local state) ──────────────────
@@ -298,6 +300,8 @@ export default function ScorecardConfigPage() {
     grade_c_rate: 0,
     grade_d_rate: 0,
     grade_f_rate: 0,
+    hours_metric_id: null,
+    hours_unit: "seconds",
   });
   const [pfpSaved, setPfpSaved] = useState(false);
 
@@ -1274,21 +1278,68 @@ export default function ScorecardConfigPage() {
               <div>
                 <h3 className="text-sm font-semibold">Pay for Performance Rates</h3>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  Set the dollar amount per logged-in hour for each grade level.
+                  Set the dollar amount per hour for each grade level. Select which metric provides the hours worked.
                 </p>
               </div>
               {template && (
                 <div className="flex items-center gap-3">
-                  {pfpSaved && <SuccessBanner message="PFP rates saved" />}
+                  {pfpSaved && <SuccessBanner message="PFP config saved" />}
                   <SaveButton
                     isPending={pfpMutation.isPending}
                     onClick={handleSavePfp}
-                    label="Save PFP Rates"
+                    label="Save PFP Config"
                   />
                 </div>
               )}
             </div>
 
+            {/* Hours Metric Selection */}
+            <div className="mb-6 p-4 rounded-lg border border-border bg-muted/30 max-w-lg">
+              <h4 className="text-sm font-semibold mb-2">Hours Worked Metric</h4>
+              <p className="text-xs text-muted-foreground mb-3">
+                Select the metric that represents an agent's hours worked. This is used to calculate total PFP payout (rate × hours).
+              </p>
+              <div className="flex items-center gap-3">
+                <select
+                  value={pfpRates.hours_metric_id || ""}
+                  onChange={(e) =>
+                    setPfpRates((prev) => ({
+                      ...prev,
+                      hours_metric_id: e.target.value || null,
+                    }))
+                  }
+                  className="flex-1 border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                >
+                  <option value="">-- Select Hours Metric --</option>
+                  {editableMetrics
+                    .slice()
+                    .sort((a, b) => (a.metric_display_name || a.metric_name).localeCompare(b.metric_display_name || b.metric_name))
+                    .map((m) => (
+                      <option key={m.metric_id} value={m.metric_id}>
+                        {m.metric_display_name || m.metric_name}
+                      </option>
+                    ))}
+                </select>
+                <select
+                  value={pfpRates.hours_unit}
+                  onChange={(e) =>
+                    setPfpRates((prev) => ({ ...prev, hours_unit: e.target.value }))
+                  }
+                  className="w-32 border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                >
+                  <option value="seconds">Seconds</option>
+                  <option value="minutes">Minutes</option>
+                  <option value="hours">Hours</option>
+                </select>
+              </div>
+              {!pfpRates.hours_metric_id && (
+                <p className="text-xs text-amber-600 mt-2">
+                  No hours metric selected. PFP payouts will be $0 until configured.
+                </p>
+              )}
+            </div>
+
+            {/* Grade Rates */}
             <div className="max-w-sm space-y-3">
               {pfpGrades.map(({ label, key, color }) => (
                 <div
@@ -1314,10 +1365,18 @@ export default function ScorecardConfigPage() {
                       }
                       className="w-28 border border-input rounded px-2 py-1 text-sm bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring"
                     />
-                    <span className="text-sm text-muted-foreground">/ logged hour</span>
+                    <span className="text-sm text-muted-foreground">/ hour</span>
                   </div>
                 </div>
               ))}
+            </div>
+
+            {/* Money Left on Table Explanation */}
+            <div className="mt-4 p-3 rounded-lg bg-blue-50 border border-blue-200 max-w-lg">
+              <p className="text-xs text-blue-700">
+                <strong>Payout</strong> = Grade Rate × Hours Worked<br />
+                <strong>Money Left on Table</strong> = (Grade A Rate × Hours) − Actual Payout
+              </p>
             </div>
           </div>
         )}

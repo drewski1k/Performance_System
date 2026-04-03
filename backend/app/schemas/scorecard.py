@@ -104,6 +104,8 @@ class PfpConfigSchema(BaseModel):
     grade_c_rate: Decimal = Decimal("0.00")
     grade_d_rate: Decimal = Decimal("0.00")
     grade_f_rate: Decimal = Decimal("0.00")
+    hours_metric_id: uuid.UUID | None = None
+    hours_unit: str = "seconds"  # "seconds", "minutes", or "hours"
 
 
 class PfpConfigOut(BaseModel):
@@ -114,5 +116,8 @@ class PfpConfigOut(BaseModel):
     grade_c_rate: Decimal
     grade_d_rate: Decimal
     grade_f_rate: Decimal
+    hours_metric_id: uuid.UUID | None = None
+    hours_unit: str = "seconds"
+    hours_metric_name: str | None = None
 
     model_config = {"from_attributes": True}
