@@ -6,7 +6,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Agent, AgentPeriodScore, ScorecardTemplate, ScoringPeriod, Supervisor
+from app.models import Agent, AgentPeriodScore, ScorecardTemplate, ScoringPeriod, Supervisor, PerformanceRecord
+from app.models.scorecard_template import ScorecardMetric
+from app.models.metric_definition import MetricDefinition
 from app.services.rollup import company_rollup, site_rollup, supervisor_rollup
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -281,4 +283,75 @@ def get_active_template(db: Session = Depends(get_db)):
         "channel_weight": float(template.channel_weight),
         "non_channel_weight": float(template.non_channel_weight),
         "is_active": template.is_active,
+    }
+
+
+@router.get("/debug")
+def debug_state(db: Session = Depends(get_db)):
+    """Diagnostic endpoint to inspect database state."""
+    from sqlalchemy import func
+
+    periods = db.scalars(select(ScoringPeriod)).all()
+    templates = db.scalars(select(ScorecardTemplate)).all()
+
+    template_info = []
+    for t in templates:
+        metrics = db.scalars(
+            select(ScorecardMetric).where(ScorecardMetric.template_id == t.id)
+        ).all()
+        metric_details = []
+        for sm in metrics:
+            md = db.get(MetricDefinition, sm.metric_id)
+            metric_details.append({
+                "sm_id": str(sm.id),
+                "key": md.key if md else "?",
+                "channel": md.channel if md else "?",
+                "direction": md.direction if md else "?",
+                "include_in_score": sm.include_in_score,
+                "show_on_scorecard": sm.show_on_scorecard,
+                "weight": float(sm.weight),
+                "grade_mode": sm.grade_mode,
+            })
+        template_info.append({
+            "id": str(t.id),
+            "name": t.name,
+            "channel_weight": float(t.channel_weight),
+            "non_channel_weight": float(t.non_channel_weight),
+            "metrics_count": len(metrics),
+            "scored_count": sum(1 for m in metric_details if m["include_in_score"]),
+            "metrics": metric_details,
+        })
+
+    agent_count = db.scalar(select(func.count()).select_from(Agent))
+    record_count = db.scalar(select(func.count()).select_from(PerformanceRecord))
+    score_count = db.scalar(select(func.count()).select_from(AgentPeriodScore))
+
+    scores_with_grade = db.scalar(
+        select(func.count()).select_from(AgentPeriodScore)
+        .where(AgentPeriodScore.final_grade.isnot(None))
+    )
+
+    sample_scores = db.scalars(
+        select(AgentPeriodScore).order_by(AgentPeriodScore.rank.asc().nullslast()).limit(3)
+    ).all()
+
+    return {
+        "periods": [{"id": str(p.id), "label": p.label} for p in periods],
+        "templates": template_info,
+        "counts": {
+            "agents": agent_count,
+            "performance_records": record_count,
+            "agent_period_scores": score_count,
+            "scores_with_grade": scores_with_grade,
+        },
+        "sample_scores": [
+            {
+                "agent_id": str(s.agent_id),
+                "final_score": float(s.final_score) if s.final_score else None,
+                "final_grade": s.final_grade,
+                "voice_score": float(s.voice_score) if s.voice_score else None,
+                "non_channel_score": float(s.non_channel_score) if s.non_channel_score else None,
+            }
+            for s in sample_scores
+        ],
     }

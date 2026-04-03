@@ -876,7 +876,7 @@ export default function ScorecardConfigPage() {
                                   <th className="px-4 py-2 font-medium text-muted-foreground">Weight %</th>
                                   <th className="px-4 py-2 font-medium text-muted-foreground">Direction</th>
                                   <th className="px-4 py-2 font-medium text-muted-foreground">Score / Grade</th>
-                                  <th className="px-4 py-2 font-medium text-muted-foreground">Show</th>
+                                  <th className="px-4 py-2 font-medium text-muted-foreground">Context Metric</th>
                                   <th className="px-4 py-2 font-medium text-muted-foreground">Min Threshold</th>
                                   <th className="px-4 py-2 font-medium text-muted-foreground">Grade Mode</th>
                                 </tr>
