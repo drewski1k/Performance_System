@@ -47,6 +47,7 @@ interface ImportResult {
   agents_scored?: number;
   metrics_created?: number;
   metrics_not_found?: string[];
+  note?: string;
 }
 
 export default function ImportPage() {
@@ -482,6 +483,15 @@ function ImportResultPanel({
           <p className="text-xs text-blue-700">
             {result.metrics_created} new metric{result.metrics_created !== 1 ? "s were" : " was"} detected and added to the system.
             Go to <span className="font-medium">Scorecard Config &rarr; Metrics</span> to set the channel, weight, and direction for each.
+          </p>
+        </div>
+      )}
+
+      {result.note && (
+        <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 max-w-lg mx-auto">
+          <p className="text-xs text-amber-700 flex items-center gap-1">
+            <Info className="h-3.5 w-3.5 flex-shrink-0" />
+            {result.note}
           </p>
         </div>
       )}

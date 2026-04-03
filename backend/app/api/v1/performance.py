@@ -375,16 +375,20 @@ def _execute_import(
 
     # All data types below need template + period — auto-create if missing
     if not template_id or not period_id:
-        template_id, period_id = _ensure_template_and_period(db, company_name, cycle)
+        skip_seed = data_type == "unified"  # unified import creates its own metrics
+        template_id, period_id = _ensure_template_and_period(
+            db, company_name, cycle, skip_seed_metrics=skip_seed,
+        )
 
     if data_type == "unified":
         roster, metrics = process_unified_data(df)
         stats = execute_unified_import(
             db, roster, metrics, template_id, period_id, company_name
         )
-        # Auto-run scoring after import
-        scored = calculate_scores(db, period_id, template_id)
-        stats["agents_scored"] = scored
+        # Don't auto-score: imported metrics start unconfigured (include_in_score=False).
+        # User must configure metrics on the Scorecard Config page first, then re-score.
+        stats["agents_scored"] = 0
+        stats["note"] = "Configure metrics on the Scorecard Config page, then click Re-Score."
         return {"data_type": "unified", "status": "success", **stats}
 
     if data_type == "combined":
@@ -406,9 +410,15 @@ def _execute_import(
 
 
 def _ensure_template_and_period(
-    db: Session, company_name: str, cycle: int | None
+    db: Session, company_name: str, cycle: int | None,
+    skip_seed_metrics: bool = False,
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    """Find or create a default scorecard template and scoring period."""
+    """Find or create a default scorecard template and scoring period.
+
+    Args:
+        skip_seed_metrics: If True, don't seed hardcoded default metrics.
+            Used for unified imports which create their own metrics dynamically.
+    """
     from datetime import date, timedelta
 
     # Find company
@@ -425,27 +435,28 @@ def _ensure_template_and_period(
     ).first()
     if template:
         # Ensure template has metrics (fix for templates created without them)
-        metric_count = db.scalar(
-            select(func.count()).select_from(ScorecardMetric)
-            .where(ScorecardMetric.template_id == template.id)
-        )
-        if not metric_count:
-            _seed_template_metrics(db, template.id)
-            # Also ensure PFP config exists
-            existing_pfp = db.scalar(
-                select(PfpConfig).where(PfpConfig.template_id == template.id)
+        if not skip_seed_metrics:
+            metric_count = db.scalar(
+                select(func.count()).select_from(ScorecardMetric)
+                .where(ScorecardMetric.template_id == template.id)
             )
-            if not existing_pfp:
-                pfp = PfpConfig(
-                    template_id=template.id,
-                    grade_a_rate=Decimal("3"),
-                    grade_b_rate=Decimal("2"),
-                    grade_c_rate=Decimal("0"),
-                    grade_d_rate=Decimal("0"),
-                    grade_f_rate=Decimal("0"),
-                )
-                db.add(pfp)
-                db.flush()
+            if not metric_count:
+                _seed_template_metrics(db, template.id)
+        # Ensure PFP config exists
+        existing_pfp = db.scalar(
+            select(PfpConfig).where(PfpConfig.template_id == template.id)
+        )
+        if not existing_pfp:
+            pfp = PfpConfig(
+                template_id=template.id,
+                grade_a_rate=Decimal("3"),
+                grade_b_rate=Decimal("2"),
+                grade_c_rate=Decimal("0"),
+                grade_d_rate=Decimal("0"),
+                grade_f_rate=Decimal("0"),
+            )
+            db.add(pfp)
+            db.flush()
     if not template:
         template = ScorecardTemplate(
             company_id=company.id,
@@ -458,8 +469,9 @@ def _ensure_template_and_period(
         db.add(template)
         db.flush()
 
-        # Add default scorecard metrics
-        _seed_template_metrics(db, template.id)
+        # Only seed default metrics for non-unified imports
+        if not skip_seed_metrics:
+            _seed_template_metrics(db, template.id)
 
         # Add PFP config
         pfp = PfpConfig(
