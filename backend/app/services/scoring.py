@@ -155,6 +155,8 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
 
     # Step 1: Compute dynamic grade scales
     dynamic_scales = _compute_dynamic_scales(db, period_id, template, agent_records)
+    log.warning(f"[SCORING] Dynamic scales computed for {len(dynamic_scales)} metrics")
+    log.warning(f"[SCORING] Template weights: channel={float(template.channel_weight)}%, non_channel={float(template.non_channel_weight)}%")
 
     # Build lookup: scorecard_metric_id -> ScorecardMetric
     sm_lookup: dict[uuid.UUID, ScorecardMetric] = {sm.id: sm for sm in template.metrics}
@@ -237,11 +239,21 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
         email_avail = _get_context_value(recs, sm_lookup, "email_avail_time")
         total_avail = voice_avail + chat_avail + email_avail
 
-        voice_pct = voice_avail / total_avail if total_avail > 0 else 0
-        chat_pct = chat_avail / total_avail if total_avail > 0 else 0
-        email_pct = email_avail / total_avail if total_avail > 0 else 0
+        # If no availability data, use equal weighting across active channels
+        if total_avail > 0:
+            voice_pct = voice_avail / total_avail
+            chat_pct = chat_avail / total_avail
+            email_pct = email_avail / total_avail
+        else:
+            active_channels = sum(1 for s in [voice_score, chat_score, email_score] if s is not None)
+            if active_channels > 0:
+                voice_pct = (1.0 / active_channels) if voice_score is not None else 0
+                chat_pct = (1.0 / active_channels) if chat_score is not None else 0
+                email_pct = (1.0 / active_channels) if email_score is not None else 0
+            else:
+                voice_pct = chat_pct = email_pct = 0
 
-        # Overall channel score (weighted by availability)
+        # Overall channel score (weighted by availability or equal weight)
         overall_channel = None
         if any(s is not None for s in [voice_score, chat_score, email_score]):
             parts = []
@@ -265,11 +277,17 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
         final_score = None
 
         if overall_channel is not None and non_channel_score is not None:
-            final_score = round(overall_channel * ch_weight + non_channel_score * nc_weight, 2)
-        elif non_channel_score is not None and nc_weight > 0:
-            final_score = round(non_channel_score * nc_weight / (nc_weight), 2)
-        elif overall_channel is not None and ch_weight > 0:
-            final_score = round(overall_channel * ch_weight / (ch_weight), 2)
+            # Both exist — use configured weights (if both are 0, split evenly)
+            if ch_weight + nc_weight > 0:
+                final_score = round(overall_channel * ch_weight + non_channel_score * nc_weight, 2)
+            else:
+                final_score = round((overall_channel + non_channel_score) / 2, 2)
+        elif non_channel_score is not None:
+            # Only non-channel exists — use it as the final score
+            final_score = round(non_channel_score, 2)
+        elif overall_channel is not None:
+            # Only channel exists — use it as the final score
+            final_score = round(overall_channel, 2)
 
         # Final grade (matches Excel: A>=90, B>=75, C>=60, D>=40, F<40)
         final_grade = None
@@ -302,6 +320,13 @@ def calculate_scores(db: Session, period_id: uuid.UUID, template_id: uuid.UUID) 
         # QA and productivity raw values for tiebreaking
         qa_raw = _get_context_value(recs, sm_lookup, "qa_score_pct")
         prod_raw = _get_context_value(recs, sm_lookup, "productivity_pct")
+
+        if len(agent_scores) == 0:
+            log.warning(f"[SCORING] First agent: channel_grades={{{k}: {len(v)} for k, v in channel_grades.items()}}}, "
+                        f"non_channel_grades={len(non_channel_grades)}, "
+                        f"voice={voice_score}, chat={chat_score}, email={email_score}, "
+                        f"overall_channel={overall_channel}, non_channel={non_channel_score}, "
+                        f"final_score={final_score}, final_grade={final_grade}")
 
         agent_scores.append({
             "agent_id": agent_id,
