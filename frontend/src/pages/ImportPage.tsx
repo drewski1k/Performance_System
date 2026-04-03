@@ -76,7 +76,7 @@ export default function ImportPage() {
     setClearing(true);
     try {
       await api.delete("/performance/reset");
-      queryClient.invalidateQueries();
+      queryClient.removeQueries();
       resetState();
       setShowClearConfirm(false);
     } catch (err: any) {
