@@ -779,9 +779,9 @@ export default function ScorecardConfigPage() {
                 Create a scorecard template to configure metrics
               </div>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-0">
                 {/* Search / filter bar */}
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 mb-3">
                   <input
                     type="text"
                     placeholder="Search metrics..."
@@ -797,6 +797,21 @@ export default function ScorecardConfigPage() {
                   <span className="text-xs text-muted-foreground ml-auto">
                     {editableMetrics.length} metrics total
                   </span>
+                </div>
+
+                {/* Sticky column headers */}
+                <div className="sticky top-0 z-20 bg-background border-b border-border">
+                  <div className="grid grid-cols-[1fr_10rem_7rem_5rem_8rem_5.5rem_5.5rem_6rem_6rem] gap-0 px-4 py-2 text-xs font-medium text-muted-foreground">
+                    <span>Metric</span>
+                    <span>Display Name</span>
+                    <span>Channel</span>
+                    <span>Weight %</span>
+                    <span>Direction</span>
+                    <span>Score / Grade</span>
+                    <span>Context Metric</span>
+                    <span>Min Threshold</span>
+                    <span>Grade Mode</span>
+                  </div>
                 </div>
 
                 {(() => {
@@ -844,7 +859,7 @@ export default function ScorecardConfigPage() {
                     })),
                   ];
 
-                  return allSections
+                  return <div className="space-y-3">{allSections
                     .filter((section) => grouped.has(section.key) && grouped.get(section.key)!.length > 0)
                     .map((section) => {
                       const sectionMetrics = grouped.get(section.key)!;
@@ -869,29 +884,14 @@ export default function ScorecardConfigPage() {
                             </div>
                           </button>
 
-                          {/* Section table (collapsible) */}
-                          {!collapsedSections.has(section.key) && <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
-                              <thead>
-                                <tr className="border-b border-border text-left">
-                                  <th className="px-4 py-2 font-medium text-muted-foreground">Metric</th>
-                                  <th className="px-4 py-2 font-medium text-muted-foreground">Display Name</th>
-                                  <th className="px-4 py-2 font-medium text-muted-foreground">Channel</th>
-                                  <th className="px-4 py-2 font-medium text-muted-foreground">Weight %</th>
-                                  <th className="px-4 py-2 font-medium text-muted-foreground">Direction</th>
-                                  <th className="px-4 py-2 font-medium text-muted-foreground">Score / Grade</th>
-                                  <th className="px-4 py-2 font-medium text-muted-foreground">Context Metric</th>
-                                  <th className="px-4 py-2 font-medium text-muted-foreground">Min Threshold</th>
-                                  <th className="px-4 py-2 font-medium text-muted-foreground">Grade Mode</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-border">
+                          {/* Section rows (collapsible) */}
+                          {!collapsedSections.has(section.key) && <div className="divide-y divide-border">
                                 {sectionMetrics.map(({ metric: m, originalIndex: i }) => (
-                                  <tr key={m.id ?? i} className="hover:bg-muted/30 transition-colors">
-                                    <td className="px-4 py-2.5 font-medium text-muted-foreground text-xs" title={m.metric_key}>{m.metric_name}</td>
+                                  <div key={m.id ?? i} className="grid grid-cols-[1fr_10rem_7rem_5rem_8rem_5.5rem_5.5rem_6rem_6rem] gap-0 px-4 py-2.5 items-start hover:bg-muted/30 transition-colors text-sm">
+                                    <span className="font-medium text-muted-foreground text-xs truncate pr-2" title={m.metric_key}>{m.metric_name}</span>
 
                                     {/* Display Name (editable) */}
-                                    <td className="px-4 py-2.5">
+                                    <div>
                                       <input
                                         type="text"
                                         value={m.metric_display_name ?? ""}
@@ -904,19 +904,18 @@ export default function ScorecardConfigPage() {
                                             queryClient.invalidateQueries({ queryKey: ["scorecard-templates"] });
                                           });
                                         }}
-                                        className="w-40 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                                        className="w-36 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
                                       />
-                                    </td>
+                                    </div>
 
-                                    {/* Channel (editable — change moves metric to different section) */}
-                                    <td className="px-4 py-2.5">
+                                    {/* Channel */}
+                                    <div>
                                       <select
                                         value={m.channel || ""}
                                         onChange={(e) => {
                                           const val = e.target.value || null;
                                           updateMetricField(i, "channel", val as any);
                                           if (!val) {
-                                            // Reset to defaults when returning to Undefined
                                             updateMetricField(i, "include_in_score", false as any);
                                             updateMetricField(i, "show_on_scorecard", false as any);
                                             updateMetricField(i, "_weight", "0" as any);
@@ -942,10 +941,10 @@ export default function ScorecardConfigPage() {
                                         <option value="email">Email</option>
                                         <option value="non_channel">Non-Channel</option>
                                       </select>
-                                    </td>
+                                    </div>
 
                                     {/* Weight */}
-                                    <td className="px-4 py-2.5">
+                                    <div>
                                       <input
                                         type="number"
                                         min="0"
@@ -953,12 +952,12 @@ export default function ScorecardConfigPage() {
                                         step="0.1"
                                         value={m._weight}
                                         onChange={(e) => updateMetricField(i, "_weight", e.target.value)}
-                                        className="w-20 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                                        className="w-16 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
                                       />
-                                    </td>
+                                    </div>
 
                                     {/* Direction */}
-                                    <td className="px-4 py-2.5">
+                                    <div>
                                       <select
                                         value={m.direction}
                                         onChange={(e) => {
@@ -982,52 +981,52 @@ export default function ScorecardConfigPage() {
                                         <option value="higher_better">Higher ▲</option>
                                         <option value="lower_better">Lower ▼</option>
                                       </select>
-                                    </td>
+                                    </div>
 
                                     {/* Include in Score */}
-                                    <td className="px-4 py-2.5">
-                                      <label className="flex items-center gap-2 cursor-pointer">
+                                    <div>
+                                      <label className="flex items-center gap-1.5 cursor-pointer">
                                         <input
                                           type="checkbox"
                                           checked={m.include_in_score}
                                           onChange={(e) => updateMetricField(i, "include_in_score", e.target.checked)}
                                           className="h-4 w-4 rounded border-input accent-primary"
                                         />
-                                        <span className={cn("text-xs px-2 py-0.5 rounded select-none", m.include_in_score ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500")}>
+                                        <span className={cn("text-xs px-1.5 py-0.5 rounded select-none", m.include_in_score ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500")}>
                                           {m.include_in_score ? "Yes" : "No"}
                                         </span>
                                       </label>
-                                    </td>
+                                    </div>
 
                                     {/* Show on Scorecard */}
-                                    <td className="px-4 py-2.5">
-                                      <label className="flex items-center gap-2 cursor-pointer">
+                                    <div>
+                                      <label className="flex items-center gap-1.5 cursor-pointer">
                                         <input
                                           type="checkbox"
                                           checked={m.show_on_scorecard}
                                           onChange={(e) => updateMetricField(i, "show_on_scorecard", e.target.checked)}
                                           className="h-4 w-4 rounded border-input accent-primary"
                                         />
-                                        <span className={cn("text-xs px-2 py-0.5 rounded select-none", m.show_on_scorecard ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500")}>
+                                        <span className={cn("text-xs px-1.5 py-0.5 rounded select-none", m.show_on_scorecard ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500")}>
                                           {m.show_on_scorecard ? "Yes" : "No"}
                                         </span>
                                       </label>
-                                    </td>
+                                    </div>
 
                                     {/* Min Threshold */}
-                                    <td className="px-4 py-2.5">
+                                    <div>
                                       <input
                                         type="number"
                                         step="any"
                                         value={m._min_threshold}
                                         placeholder="—"
                                         onChange={(e) => updateMetricField(i, "_min_threshold", e.target.value)}
-                                        className="w-24 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                                        className="w-20 border border-input rounded px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
                                       />
-                                    </td>
+                                    </div>
 
                                     {/* Grade Mode */}
-                                    <td className="px-4 py-2.5">
+                                    <div>
                                       <select
                                         value={m.grade_mode ?? "dynamic"}
                                         onChange={(e) => updateMetricField(i, "grade_mode", e.target.value)}
@@ -1056,21 +1055,19 @@ export default function ScorecardConfigPage() {
                                                   const updated = { ...m.manual_thresholds, [g]: val };
                                                   updateMetricField(i, "manual_thresholds", updated as Record<string, number>);
                                                 }}
-                                                className="w-16 border border-input rounded px-1 py-0.5 text-xs bg-background text-center focus:outline-none focus:ring-1 focus:ring-ring"
+                                                className="w-14 border border-input rounded px-1 py-0.5 text-xs bg-background text-center focus:outline-none focus:ring-1 focus:ring-ring"
                                               />
                                             </div>
                                           ))}
                                         </div>
                                       )}
-                                    </td>
-                                  </tr>
+                                    </div>
+                                  </div>
                                 ))}
-                              </tbody>
-                            </table>
                           </div>}
                         </div>
                       );
-                    });
+                    })}</div>;
                 })()}
               </div>
             )}
