@@ -977,6 +977,20 @@ def execute_unified_import(
             # Update employee_id to email if we now have one
             if email and agent.employee_id.startswith("agent_"):
                 agent.employee_id = email
+            # Update extended roster fields if provided
+            if r.get("job_title"):
+                agent.job_title = r["job_title"]
+            if r.get("department"):
+                agent.department = r["department"]
+            if r.get("hire_date"):
+                try:
+                    from datetime import date as date_type
+                    import dateutil.parser
+                    agent.hire_date = dateutil.parser.parse(r["hire_date"]).date()
+                except Exception:
+                    pass
+            if r.get("metadata"):
+                agent.metadata_ = {**(agent.metadata_ or {}), **r["metadata"]}
             stats["agents_updated"] += 1
         else:
             agent = Agent(
@@ -984,7 +998,16 @@ def execute_unified_import(
                 employee_id=emp_id,
                 first_name=first, last_name=last,
                 email=email or None,
+                job_title=r.get("job_title") or None,
+                department=r.get("department") or None,
+                metadata_=r.get("metadata"),
             )
+            if r.get("hire_date"):
+                try:
+                    import dateutil.parser
+                    agent.hire_date = dateutil.parser.parse(r["hire_date"]).date()
+                except Exception:
+                    pass
             db.add(agent)
             db.flush()
             stats["agents_created"] += 1

@@ -46,6 +46,24 @@ ROSTER_FIELDS = [
         ],
     },
     {
+        "key": "job_title",
+        "label": "Job Title",
+        "required": False,
+        "aliases": [
+            "job title", "title", "role", "position", "job role",
+            "job position", "designation", "job name",
+        ],
+    },
+    {
+        "key": "department",
+        "label": "Department",
+        "required": False,
+        "aliases": [
+            "department", "dept", "division", "group", "team",
+            "business unit", "org", "organization",
+        ],
+    },
+    {
         "key": "bpo",
         "label": "BPO",
         "required": False,
@@ -72,7 +90,21 @@ ROSTER_FIELDS = [
             "sup", "reporting to", "reports to", "supervisor name",
         ],
     },
+    {
+        "key": "hire_date",
+        "label": "Hire Date",
+        "required": False,
+        "aliases": [
+            "hire date", "start date", "date hired", "join date",
+            "employment date", "onboard date",
+        ],
+    },
 ]
+
+# Fields stored as custom metadata (JSONB) on the Agent model
+CUSTOM_ROSTER_KEYS = {"job_title", "department", "hire_date"}
+# Fields that are proper columns on the Agent model
+AGENT_COLUMN_KEYS = {"agent_name", "email", "employee_id", "bpo", "site", "supervisor", "job_title", "department", "hire_date"}
 
 
 def _normalize(s: str) -> str:
@@ -227,32 +259,34 @@ def apply_column_mapping(
             metric_cols.append(original)
         # "exclude" — skip
 
+    # Also collect custom roster mappings (mapped_to starts with "custom:")
+    custom_col_map: dict[str, str] = {}  # custom_field_name -> original_column_name
+    for m in mappings:
+        if m.get("mapping_type") == "roster" and m.get("mapped_to", "").startswith("custom:"):
+            custom_col_map[m["mapped_to"][7:]] = m["original"]
+
     roster = []
     metrics = []
+
+    _nan_vals = {"nan", "NaT", "None", ""}
+
+    def _clean(val: str) -> str:
+        return val if val not in _nan_vals else ""
 
     for _, row in df.iterrows():
         # Extract roster fields using the mapping
         name = str(row.get(roster_col_map.get("agent_name", ""), "")).strip()
-        if not name or name in ("nan", "NaT", ""):
+        if not name or name in _nan_vals:
             continue
 
-        email = str(row.get(roster_col_map.get("email", ""), "")).strip()
-        emp_id_col = roster_col_map.get("employee_id", "")
-        emp_id_raw = str(row.get(emp_id_col, "")).strip() if emp_id_col else ""
-        bpo = str(row.get(roster_col_map.get("bpo", ""), "")).strip()
-        site = str(row.get(roster_col_map.get("site", ""), "")).strip()
-        supervisor = str(row.get(roster_col_map.get("supervisor", ""), "")).strip()
-
-        # Clean NaN strings
-        for var_name in ["email", "emp_id_raw", "bpo", "site", "supervisor"]:
-            val = locals()[var_name]
-            if val in ("nan", "NaT", "None", ""):
-                locals()[var_name] = ""
-        email = email if email not in ("nan", "NaT", "None") else ""
-        emp_id_raw = emp_id_raw if emp_id_raw not in ("nan", "NaT", "None") else ""
-        bpo = bpo if bpo not in ("nan", "NaT", "None") else ""
-        site = site if site not in ("nan", "NaT", "None") else ""
-        supervisor = supervisor if supervisor not in ("nan", "NaT", "None") else ""
+        email = _clean(str(row.get(roster_col_map.get("email", ""), "")).strip())
+        emp_id_raw = _clean(str(row.get(roster_col_map.get("employee_id", ""), "")).strip())
+        bpo = _clean(str(row.get(roster_col_map.get("bpo", ""), "")).strip())
+        site = _clean(str(row.get(roster_col_map.get("site", ""), "")).strip())
+        supervisor = _clean(str(row.get(roster_col_map.get("supervisor", ""), "")).strip())
+        job_title = _clean(str(row.get(roster_col_map.get("job_title", ""), "")).strip())
+        department = _clean(str(row.get(roster_col_map.get("department", ""), "")).strip())
+        hire_date = _clean(str(row.get(roster_col_map.get("hire_date", ""), "")).strip())
 
         # Generate employee_id: prefer explicit ID, then email, then name-based
         if emp_id_raw:
@@ -262,6 +296,13 @@ def apply_column_mapping(
         else:
             emp_id = f"agent_{name.lower().replace(' ', '_')}"
 
+        # Build custom metadata from any custom:* mappings
+        metadata: dict[str, str] = {}
+        for field_name, col_name in custom_col_map.items():
+            val = _clean(str(row.get(col_name, "")).strip())
+            if val:
+                metadata[field_name] = val
+
         roster.append({
             "name": name,
             "email": email,
@@ -269,6 +310,10 @@ def apply_column_mapping(
             "bpo": bpo,
             "site": site or "Unknown",
             "supervisor": supervisor or "Unknown",
+            "job_title": job_title,
+            "department": department,
+            "hire_date": hire_date,
+            "metadata": metadata if metadata else None,
         })
 
         # Extract metrics

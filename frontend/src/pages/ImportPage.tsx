@@ -538,25 +538,45 @@ function MappingPanel({
                 {/* Maps to */}
                 <div>
                   {isRoster ? (
-                    <select
-                      value={col.mapped_to || ""}
-                      onChange={(e) => onUpdateMapping(idx, { mapped_to: e.target.value })}
-                      className={`text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring w-full ${
-                        !col.mapped_to ? "text-red-500 border-red-300" : "text-blue-700"
-                      }`}
-                    >
-                      <option value="">-- Select Field --</option>
-                      {rosterFields.map((f) => (
-                        <option
-                          key={f.key}
-                          value={f.key}
-                          disabled={usedRosterKeys.has(f.key) && col.mapped_to !== f.key}
+                    col.mapped_to?.startsWith("custom:") ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={col.mapped_to.slice(7)}
+                          onChange={(e) => onUpdateMapping(idx, { mapped_to: `custom:${e.target.value}` })}
+                          placeholder="Field name..."
+                          className="w-24 text-xs px-2 py-1 rounded border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                          autoFocus
+                        />
+                        <button
+                          onClick={() => onUpdateMapping(idx, { mapped_to: "" })}
+                          className="text-xs text-muted-foreground hover:text-foreground"
                         >
-                          {f.label}{f.required ? " *" : ""}
-                          {usedRosterKeys.has(f.key) && col.mapped_to !== f.key ? " (used)" : ""}
-                        </option>
-                      ))}
-                    </select>
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <select
+                        value={col.mapped_to || ""}
+                        onChange={(e) => onUpdateMapping(idx, { mapped_to: e.target.value === "__custom__" ? "custom:" : e.target.value })}
+                        className={`text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring w-full ${
+                          !col.mapped_to ? "text-red-500 border-red-300" : "text-blue-700"
+                        }`}
+                      >
+                        <option value="">-- Select Field --</option>
+                        {rosterFields.map((f) => (
+                          <option
+                            key={f.key}
+                            value={f.key}
+                            disabled={usedRosterKeys.has(f.key) && col.mapped_to !== f.key}
+                          >
+                            {f.label}{f.required ? " *" : ""}
+                            {usedRosterKeys.has(f.key) && col.mapped_to !== f.key ? " (used)" : ""}
+                          </option>
+                        ))}
+                        <option value="__custom__">+ Custom Field...</option>
+                      </select>
+                    )
                   ) : isExcluded ? (
                     <span className="text-xs text-gray-400 italic">skipped</span>
                   ) : (
