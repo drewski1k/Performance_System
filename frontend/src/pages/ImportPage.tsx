@@ -8,6 +8,7 @@ import {
   X,
   Info,
   Download,
+  Trash2,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
@@ -60,6 +61,9 @@ export default function ImportPage() {
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [clearing, setClearing] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+
   const resetState = useCallback(() => {
     setStep("select");
     setPreview(null);
@@ -67,6 +71,20 @@ export default function ImportPage() {
     setError(null);
     setSelectedFile(null);
   }, []);
+
+  const handleClearAllData = useCallback(async () => {
+    setClearing(true);
+    try {
+      await api.delete("/performance/reset");
+      queryClient.invalidateQueries();
+      resetState();
+      setShowClearConfirm(false);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Failed to clear data");
+    } finally {
+      setClearing(false);
+    }
+  }, [queryClient, resetState]);
 
   const handleFileDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -146,6 +164,13 @@ export default function ImportPage() {
             <Download className="h-4 w-4" />
             Download Template
           </a>
+          <button
+            onClick={() => setShowClearConfirm(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+          >
+            <Trash2 className="h-4 w-4" />
+            Clear All Data
+          </button>
           {step !== "select" && (
             <button
               onClick={resetState}
@@ -156,6 +181,42 @@ export default function ImportPage() {
           )}
         </div>
       </div>
+
+      {/* Clear All Data Confirmation */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-background rounded-xl border border-border shadow-xl p-6 max-w-sm w-full mx-4 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-red-100 flex items-center justify-center">
+                <Trash2 className="h-5 w-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold">Clear All Data</h3>
+                <p className="text-xs text-muted-foreground">This cannot be undone.</p>
+              </div>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              This will delete all imported data including agents, metrics, scores, templates, and configurations. You'll need to re-import everything.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleClearAllData}
+                disabled={clearing}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+              >
+                {clearing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {clearing ? "Clearing..." : "Clear Everything"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Step: Upload */}
       {step === "select" && (

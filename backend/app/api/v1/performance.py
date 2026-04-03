@@ -550,3 +550,27 @@ def _seed_template_metrics(db: Session, template_id: uuid.UUID) -> None:
         )
         db.add(sm)
     db.flush()
+
+
+@router.delete("/reset")
+def reset_all_data(db: Session = Depends(get_db)):
+    """Delete all imported data: scores, records, metrics, templates, agents, etc."""
+    from app.models import (
+        AgentPeriodScore, DynamicGradeScale, PerformanceRecord,
+        ScorecardMetric, MetricDefinition, Agent, Supervisor, Site,
+    )
+    # Delete in FK order
+    db.query(DynamicGradeScale).delete()
+    db.query(AgentPeriodScore).delete()
+    db.query(PerformanceRecord).delete()
+    db.query(ScorecardMetric).delete()
+    db.query(PfpConfig).delete()
+    db.query(ScorecardTemplate).delete()
+    db.query(ScoringPeriod).delete()
+    db.query(MetricDefinition).delete()
+    db.query(Agent).delete()
+    db.query(Supervisor).delete()
+    db.query(Site).delete()
+    db.query(Company).delete()
+    db.commit()
+    return {"status": "ok", "message": "All data cleared"}
