@@ -10,6 +10,7 @@ from app.models.agent_score import AgentPeriodScore, DynamicGradeScale
 from app.models.pfp_config import PfpConfig
 from app.models.productivity_state import ProductivityState
 from app.models.user import User
+from app.models.column_mapping_profile import ColumnMappingProfile
 
 __all__ = [
     "Company", "Site", "Supervisor", "Agent",
@@ -17,4 +18,5 @@ __all__ = [
     "ScoringPeriod", "PerformanceRecord",
     "AgentPeriodScore", "DynamicGradeScale",
     "PfpConfig", "ProductivityState", "User",
+    "ColumnMappingProfile",
 ]

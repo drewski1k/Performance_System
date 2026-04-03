@@ -256,6 +256,196 @@ def execute_paste_import(data: ImportExecute, db: Session = Depends(get_db)):
     )
 
 
+# --- Smart Column Mapping ---
+
+@router.post("/import/detect-columns")
+async def detect_columns(
+    file: UploadFile,
+    db: Session = Depends(get_db),
+):
+    """Upload a file and get smart column mapping suggestions.
+
+    Returns column list with suggested roster/metric mappings,
+    plus any matching saved profiles.
+    """
+    from app.services.column_mapping import detect_column_mappings
+
+    content = await file.read()
+    filename = file.filename or "data.csv"
+    df = parse_upload(content, filename)
+
+    columns = list(df.columns)
+    detection = detect_column_mappings(columns, db)
+
+    # Check for matching saved profiles
+    fingerprint = sorted(columns)
+    matching_profiles = _find_matching_profiles(db, fingerprint)
+
+    # Sample data for preview (first 5 rows)
+    sample_rows = df.head(5).fillna("").astype(str).to_dict(orient="records")
+
+    return {
+        **detection,
+        "total_rows": len(df),
+        "sample_data": sample_rows,
+        "matching_profiles": matching_profiles,
+    }
+
+
+@router.post("/import/mapped")
+async def execute_mapped_import(
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    mappings: str = "",  # JSON string of column mappings
+    profile_name: str | None = None,  # Save as profile
+    company_name: str = "Sephora",
+    cycle: int | None = None,
+):
+    """Import a file using user-confirmed column mappings."""
+    import json
+    import traceback
+    from app.services.column_mapping import apply_column_mapping
+
+    content = await file.read()
+    filename = file.filename or "data.csv"
+
+    try:
+        df = parse_upload(content, filename)
+        mapping_list = json.loads(mappings) if mappings else []
+
+        if not mapping_list:
+            raise HTTPException(400, "No column mappings provided")
+
+        # Validate that agent_name is mapped
+        roster_mappings = [m for m in mapping_list if m.get("mapping_type") == "roster"]
+        has_name = any(m.get("mapped_to") == "agent_name" for m in roster_mappings)
+        if not has_name:
+            raise HTTPException(400, "Agent Name must be mapped to a column")
+
+        # Apply mappings to get roster + metrics
+        roster, metrics = apply_column_mapping(df, mapping_list)
+
+        if not roster:
+            raise HTTPException(400, "No agent rows found after applying mappings")
+
+        # Ensure template + period exist (skip seeding defaults)
+        template_id, period_id = _ensure_template_and_period(
+            db, company_name, cycle, skip_seed_metrics=True,
+        )
+
+        # Execute the import
+        stats = execute_unified_import(
+            db, roster, metrics, template_id, period_id, company_name,
+        )
+
+        # Don't auto-score
+        stats["agents_scored"] = 0
+        stats["note"] = "Configure metrics on the Scorecard Config page, then click Re-Score."
+
+        # Save mapping profile if requested
+        if profile_name:
+            _save_mapping_profile(db, company_name, profile_name, mapping_list, list(df.columns))
+
+        return {"data_type": "mapped", "status": "success", **stats}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(500, f"Import failed: {str(e)}")
+
+
+# --- Mapping Profiles ---
+
+@router.get("/mapping-profiles")
+def list_mapping_profiles(db: Session = Depends(get_db)):
+    """List all saved column mapping profiles."""
+    from app.models import ColumnMappingProfile
+    profiles = db.scalars(
+        select(ColumnMappingProfile).order_by(ColumnMappingProfile.name)
+    ).all()
+    return [
+        {
+            "id": str(p.id),
+            "name": p.name,
+            "description": p.description,
+            "mappings": p.mappings,
+            "column_fingerprint": p.column_fingerprint,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+        }
+        for p in profiles
+    ]
+
+
+@router.get("/mapping-profiles/{profile_id}")
+def get_mapping_profile(profile_id: uuid.UUID, db: Session = Depends(get_db)):
+    from app.models import ColumnMappingProfile
+    profile = db.get(ColumnMappingProfile, profile_id)
+    if not profile:
+        raise HTTPException(404, "Profile not found")
+    return {
+        "id": str(profile.id),
+        "name": profile.name,
+        "description": profile.description,
+        "mappings": profile.mappings,
+        "column_fingerprint": profile.column_fingerprint,
+    }
+
+
+@router.delete("/mapping-profiles/{profile_id}")
+def delete_mapping_profile(profile_id: uuid.UUID, db: Session = Depends(get_db)):
+    from app.models import ColumnMappingProfile
+    profile = db.get(ColumnMappingProfile, profile_id)
+    if not profile:
+        raise HTTPException(404, "Profile not found")
+    db.delete(profile)
+    db.commit()
+    return {"status": "ok"}
+
+
+def _find_matching_profiles(db: Session, fingerprint: list[str]) -> list[dict]:
+    """Find saved profiles whose column fingerprint matches."""
+    from app.models import ColumnMappingProfile
+    profiles = db.scalars(select(ColumnMappingProfile)).all()
+    matches = []
+    for p in profiles:
+        saved_fp = sorted(p.column_fingerprint) if p.column_fingerprint else []
+        overlap = len(set(fingerprint) & set(saved_fp))
+        total = max(len(fingerprint), len(saved_fp), 1)
+        similarity = overlap / total
+        if similarity >= 0.7:  # 70% column overlap = likely same format
+            matches.append({
+                "id": str(p.id),
+                "name": p.name,
+                "similarity": round(similarity, 2),
+                "mappings": p.mappings,
+            })
+    matches.sort(key=lambda x: x["similarity"], reverse=True)
+    return matches
+
+
+def _save_mapping_profile(
+    db: Session, company_name: str, name: str,
+    mappings: list[dict], columns: list[str],
+):
+    """Save a mapping profile for future use."""
+    from app.models import ColumnMappingProfile
+    company = db.scalars(select(Company).limit(1)).first()
+    if not company:
+        company = Company(name=company_name)
+        db.add(company)
+        db.flush()
+
+    profile = ColumnMappingProfile(
+        company_id=company.id,
+        name=name,
+        mappings=mappings,
+        column_fingerprint=sorted(columns),
+    )
+    db.add(profile)
+    db.commit()
+
+
 # --- Scoring ---
 
 @router.post("/calculate/{period_id}")
@@ -558,6 +748,7 @@ def reset_all_data(db: Session = Depends(get_db)):
     from app.models import (
         AgentPeriodScore, DynamicGradeScale, PerformanceRecord,
         ScorecardMetric, MetricDefinition, Agent, Supervisor, Site,
+        ColumnMappingProfile,
     )
     # Delete in FK order
     db.query(DynamicGradeScale).delete()
@@ -571,6 +762,7 @@ def reset_all_data(db: Session = Depends(get_db)):
     db.query(Agent).delete()
     db.query(Supervisor).delete()
     db.query(Site).delete()
+    db.query(ColumnMappingProfile).delete()
     db.query(Company).delete()
     db.commit()
     return {"status": "ok", "message": "All data cleared"}

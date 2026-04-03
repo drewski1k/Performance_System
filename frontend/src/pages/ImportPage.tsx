@@ -7,32 +7,47 @@ import {
   Loader2,
   X,
   Info,
-  Download,
   Trash2,
+  ArrowRight,
+  Save,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
 
-type ImportStep = "select" | "preview" | "importing" | "done";
+type ImportStep = "select" | "mapping" | "importing" | "done";
 
-interface PreviewRow {
-  [key: string]: string | number;
+// ── Types ────────────────────────────────────────────────────────────────────
+
+interface ColumnMapping {
+  index: number;
+  original: string;
+  suggested_mapping: string;
+  suggested_label: string;
+  confidence: number;
+  mapping_type: "roster" | "metric" | "exclude";
+  mapped_to?: string;  // for roster: "agent_name", "email", etc.
 }
 
-interface PreviewResult {
-  data_type: string;
-  valid_rows: number;
-  total_rows?: number;
-  columns_found?: string[];
-  metrics_found?: string[];
-  total_metrics?: number;
-  errors: string[];
-  warnings?: string[];
-  preview: PreviewRow[];
-  bpos?: string[];
-  sites?: string[];
-  supervisors?: string[];
-  error?: string;
+interface RosterField {
+  key: string;
+  label: string;
+  required: boolean;
+}
+
+interface MatchingProfile {
+  id: string;
+  name: string;
+  similarity: number;
+  mappings: ColumnMapping[];
+}
+
+interface DetectResult {
+  columns: ColumnMapping[];
+  roster_fields: RosterField[];
+  unmapped_required: string[];
+  total_rows: number;
+  sample_data: Record<string, string>[];
+  matching_profiles: MatchingProfile[];
 }
 
 interface ImportResult {
@@ -51,25 +66,32 @@ interface ImportResult {
   note?: string;
 }
 
+// ── Main Component ───────────────────────────────────────────────────────────
+
 export default function ImportPage() {
   const queryClient = useQueryClient();
   const [step, setStep] = useState<ImportStep>("select");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [detectResult, setDetectResult] = useState<DetectResult | null>(null);
+  const [columnMappings, setColumnMappings] = useState<ColumnMapping[]>([]);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saveProfileName, setSaveProfileName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Clear all data
   const [clearing, setClearing] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const resetState = useCallback(() => {
     setStep("select");
-    setPreview(null);
+    setDetectResult(null);
+    setColumnMappings([]);
     setImportResult(null);
     setError(null);
     setSelectedFile(null);
+    setSaveProfileName("");
   }, []);
 
   const handleClearAllData = useCallback(async () => {
@@ -86,18 +108,9 @@ export default function ImportPage() {
     }
   }, [queryClient, resetState]);
 
-  const handleFileDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) setSelectedFile(file);
-  }, []);
+  // ── Step 1: Detect columns ───────────────────────────────────────────────
 
-  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) setSelectedFile(file);
-  }, []);
-
-  const handlePreview = useCallback(async () => {
+  const handleDetectColumns = useCallback(async () => {
     if (!selectedFile) return;
     setLoading(true);
     setError(null);
@@ -106,20 +119,51 @@ export default function ImportPage() {
       const formData = new FormData();
       formData.append("file", selectedFile);
 
-      const resp = await api.post("/performance/import/preview", formData, {
+      const resp = await api.post("/performance/import/detect-columns", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
-      setPreview(resp.data);
-      setStep("preview");
+      const data: DetectResult = resp.data;
+      setDetectResult(data);
+
+      // If there's a matching profile, apply it; otherwise use suggestions
+      if (data.matching_profiles.length > 0) {
+        const profile = data.matching_profiles[0];
+        // Map profile mappings to current columns
+        const profileMap = new Map(
+          profile.mappings.map((m: any) => [m.original, m])
+        );
+        const mappings = data.columns.map((col) => {
+          const saved = profileMap.get(col.original);
+          if (saved) {
+            return {
+              ...col,
+              mapping_type: saved.mapping_type,
+              mapped_to: saved.mapped_to,
+            };
+          }
+          return col;
+        });
+        setColumnMappings(mappings);
+      } else {
+        // Use auto-detected suggestions
+        setColumnMappings(data.columns.map((col) => ({
+          ...col,
+          mapped_to: col.mapping_type === "roster" ? col.suggested_mapping : undefined,
+        })));
+      }
+
+      setStep("mapping");
     } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || "Preview failed");
+      setError(err.response?.data?.detail || err.message || "Failed to analyze file");
     } finally {
       setLoading(false);
     }
   }, [selectedFile]);
 
-  const handleImport = useCallback(async () => {
+  // ── Step 2: Execute mapped import ────────────────────────────────────────
+
+  const handleMappedImport = useCallback(async () => {
     if (!selectedFile) return;
     setLoading(true);
     setError(null);
@@ -128,8 +172,12 @@ export default function ImportPage() {
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
+      formData.append("mappings", JSON.stringify(columnMappings));
+      if (saveProfileName) {
+        formData.append("profile_name", saveProfileName);
+      }
 
-      const resp = await api.post("/performance/import/upload", formData, {
+      const resp = await api.post("/performance/import/mapped", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
@@ -139,11 +187,28 @@ export default function ImportPage() {
       queryClient.invalidateQueries({ queryKey: ["scorecard-templates"] });
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || "Import failed");
-      setStep("preview");
+      setStep("mapping");
     } finally {
       setLoading(false);
     }
-  }, [selectedFile, queryClient]);
+  }, [selectedFile, columnMappings, saveProfileName, queryClient]);
+
+  // ── Mapping helpers ──────────────────────────────────────────────────────
+
+  const updateMapping = (index: number, updates: Partial<ColumnMapping>) => {
+    setColumnMappings((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], ...updates };
+      return next;
+    });
+  };
+
+  const rosterMappings = columnMappings.filter((m) => m.mapping_type === "roster");
+  const metricMappings = columnMappings.filter((m) => m.mapping_type === "metric");
+  const excludedMappings = columnMappings.filter((m) => m.mapping_type === "exclude");
+  const hasAgentName = rosterMappings.some((m) => m.mapped_to === "agent_name");
+
+  // ── Render ─────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-6">
@@ -152,18 +217,10 @@ export default function ImportPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Import Data</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Upload your performance data — roster and metrics in one file
+            Upload any spreadsheet — we'll help you map the columns
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <a
-            href={`${api.defaults.baseURL}/performance/template/download`}
-            download
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border text-sm font-medium hover:bg-muted transition-colors"
-          >
-            <Download className="h-4 w-4" />
-            Download Template
-          </a>
           <button
             onClick={() => setShowClearConfirm(true)}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
@@ -218,24 +275,22 @@ export default function ImportPage() {
         </div>
       )}
 
-      {/* Step: Upload */}
+      {/* Step: Select file */}
       {step === "select" && (
         <>
           <div
             onDragOver={(e) => e.preventDefault()}
-            onDrop={handleFileDrop}
+            onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) setSelectedFile(f); }}
             onClick={() => fileInputRef.current?.click()}
             className={`bg-card rounded-xl border-2 border-dashed p-12 text-center shadow-sm cursor-pointer transition-colors ${
-              selectedFile
-                ? "border-primary/50 bg-primary/5"
-                : "border-border hover:border-primary/40"
+              selectedFile ? "border-primary/50 bg-primary/5" : "border-border hover:border-primary/40"
             }`}
           >
             <input
               ref={fileInputRef}
               type="file"
               accept=".csv,.xlsx,.xls"
-              onChange={handleFileSelect}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) setSelectedFile(f); }}
               className="hidden"
             />
             {selectedFile ? (
@@ -255,7 +310,7 @@ export default function ImportPage() {
                   Drag and drop your file here, or click to browse
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Excel (.xlsx) or CSV file using the template format
+                  Excel (.xlsx) or CSV — any column layout
                 </p>
               </>
             )}
@@ -271,29 +326,50 @@ export default function ImportPage() {
           {selectedFile && (
             <div className="flex justify-end">
               <button
-                onClick={handlePreview}
+                onClick={handleDetectColumns}
                 disabled={loading}
                 className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 hover:bg-primary/90 transition-colors"
               >
-                {loading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Upload className="h-4 w-4" />
-                )}
-                Preview Data
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                Analyze Columns
               </button>
             </div>
           )}
+
+          {/* How it works */}
+          <div className="bg-card rounded-xl border border-border p-5 shadow-sm">
+            <div className="flex items-center gap-2 mb-3">
+              <Info className="h-4 w-4 text-muted-foreground" />
+              <h3 className="text-sm font-semibold">How It Works</h3>
+            </div>
+            <ol className="text-sm space-y-1.5 list-decimal list-inside text-muted-foreground">
+              <li><span className="font-medium text-foreground">Upload any file</span> — we'll auto-detect your columns</li>
+              <li><span className="font-medium text-foreground">Map your columns</span> — tell us which column is the agent name, site, etc.</li>
+              <li><span className="font-medium text-foreground">Everything else becomes a metric</span> — configure them on the Scorecard Config tab</li>
+            </ol>
+            <p className="text-xs text-muted-foreground mt-2">
+              Save your mapping as a profile so next time it's applied automatically.
+            </p>
+          </div>
         </>
       )}
 
-      {/* Step: Preview */}
-      {step === "preview" && preview && (
-        <PreviewPanel
-          preview={preview}
+      {/* Step: Column Mapping */}
+      {step === "mapping" && detectResult && (
+        <MappingPanel
+          detectResult={detectResult}
+          mappings={columnMappings}
+          onUpdateMapping={updateMapping}
+          rosterFields={detectResult.roster_fields}
+          hasAgentName={hasAgentName}
+          rosterCount={rosterMappings.length}
+          metricCount={metricMappings.length}
+          excludedCount={excludedMappings.length}
           loading={loading}
           error={error}
-          onImport={handleImport}
+          saveProfileName={saveProfileName}
+          onSaveProfileNameChange={setSaveProfileName}
+          onImport={handleMappedImport}
           onBack={resetState}
         />
       )}
@@ -310,158 +386,203 @@ export default function ImportPage() {
       {step === "done" && importResult && (
         <ImportResultPanel result={importResult} onReset={resetState} />
       )}
-
-      {/* How to Import */}
-      <div className="bg-card rounded-xl border border-border p-5 shadow-sm">
-        <div className="flex items-center gap-2 mb-3">
-          <Info className="h-4 w-4 text-muted-foreground" />
-          <h3 className="text-sm font-semibold">How to Import</h3>
-        </div>
-        <div className="p-3 mb-3 rounded-lg bg-primary/5 border border-primary/20">
-          <ol className="text-sm space-y-1.5 list-decimal list-inside text-muted-foreground">
-            <li><span className="font-medium text-foreground">Download the template</span> — click the button above to get the Excel template</li>
-            <li><span className="font-medium text-foreground">Fill it out</span> — one row per agent with roster info + metric values</li>
-            <li><span className="font-medium text-foreground">Upload it</span> — the system handles everything: roster, metrics, and scoring</li>
-          </ol>
-          <p className="text-xs text-muted-foreground mt-2">
-            New metrics are auto-detected from column headers. Configure them (channel, weight, direction) on the Scorecard Config tab after upload.
-          </p>
-        </div>
-        <div className="p-3 rounded-lg bg-muted/40">
-          <div className="flex items-start gap-2.5">
-            <FileSpreadsheet className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-medium">Template Structure</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Columns A-E (required): Agent Name, Email, BPO, Site, Supervisor
-              </p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Columns F+ (your metrics): Add any number of metric columns
-              </p>
-              <p className="text-xs text-muted-foreground/70 mt-1 font-mono">
-                Agent Name | Email | BPO | Site | Supervisor | Voice AHT | Chat CPH | QA Score | ...
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
 
 
-// ---------------------------------------------------------------------------
-// Preview Panel
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// Mapping Panel
+// ─────────────────────────────────────────────────────────────────────────────
 
-function PreviewPanel({
-  preview,
+function MappingPanel({
+  detectResult,
+  mappings,
+  onUpdateMapping,
+  rosterFields,
+  hasAgentName,
+  rosterCount,
+  metricCount,
+  excludedCount,
   loading,
   error,
+  saveProfileName,
+  onSaveProfileNameChange,
   onImport,
   onBack,
 }: {
-  preview: PreviewResult;
+  detectResult: DetectResult;
+  mappings: ColumnMapping[];
+  onUpdateMapping: (index: number, updates: Partial<ColumnMapping>) => void;
+  rosterFields: RosterField[];
+  hasAgentName: boolean;
+  rosterCount: number;
+  metricCount: number;
+  excludedCount: number;
   loading: boolean;
   error: string | null;
+  saveProfileName: string;
+  onSaveProfileNameChange: (v: string) => void;
   onImport: () => void;
   onBack: () => void;
 }) {
+  // Collect which roster keys are already assigned
+  const usedRosterKeys = new Set(
+    mappings
+      .filter((m) => m.mapping_type === "roster" && m.mapped_to)
+      .map((m) => m.mapped_to!)
+  );
+
   return (
     <div className="space-y-4">
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <SummaryCard label="Agents" value={preview.valid_rows} />
-        {preview.total_metrics != null && (
-          <SummaryCard label="Metrics Found" value={preview.total_metrics} />
-        )}
-        {preview.bpos && <SummaryCard label="BPOs" value={preview.bpos.length} />}
-        {preview.sites && <SummaryCard label="Sites" value={preview.sites.length} />}
-        {preview.supervisors && <SummaryCard label="Supervisors" value={preview.supervisors.length} />}
-      </div>
-
-      {/* Warnings */}
-      {preview.warnings && preview.warnings.length > 0 && (
-        <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
-          {preview.warnings.map((w, i) => (
-            <p key={i} className="text-sm text-yellow-700 flex items-start gap-2">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              {w}
-            </p>
-          ))}
+      {/* Matched profile banner */}
+      {detectResult.matching_profiles.length > 0 && (
+        <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200">
+          <p className="text-sm text-emerald-700 flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4" />
+            Saved profile <strong>"{detectResult.matching_profiles[0].name}"</strong> auto-applied
+            ({Math.round(detectResult.matching_profiles[0].similarity * 100)}% column match).
+            Review below and adjust if needed.
+          </p>
         </div>
       )}
 
-      {/* Errors */}
-      {preview.errors.length > 0 && (
-        <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 space-y-1">
-          {preview.errors.slice(0, 5).map((e, i) => (
-            <p key={i} className="text-sm text-red-600">{e}</p>
-          ))}
-          {preview.errors.length > 5 && (
-            <p className="text-xs text-red-500">...and {preview.errors.length - 5} more</p>
+      {/* Summary bar */}
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex items-center gap-2 text-sm">
+          <span className="font-semibold">{detectResult.total_rows}</span>
+          <span className="text-muted-foreground">rows detected</span>
+        </div>
+        <div className="flex items-center gap-4 text-xs">
+          <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700 font-medium">
+            {rosterCount} roster
+          </span>
+          <span className="px-2 py-1 rounded-full bg-purple-100 text-purple-700 font-medium">
+            {metricCount} metrics
+          </span>
+          {excludedCount > 0 && (
+            <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-500 font-medium">
+              {excludedCount} excluded
+            </span>
           )}
         </div>
-      )}
+        {!hasAgentName && (
+          <span className="text-xs text-red-600 font-medium flex items-center gap-1">
+            <AlertCircle className="h-3.5 w-3.5" />
+            Agent Name must be mapped
+          </span>
+        )}
+      </div>
 
-      {/* Metrics found */}
-      {preview.metrics_found && preview.metrics_found.length > 0 && (
-        <div className="bg-card rounded-xl border border-border p-4 shadow-sm">
-          <h4 className="text-sm font-medium mb-2">Metrics Detected</h4>
-          <div className="flex flex-wrap gap-1.5">
-            {preview.metrics_found.map((m) => (
-              <span
-                key={m}
-                className="px-2 py-0.5 text-xs rounded-full bg-muted text-muted-foreground"
+      {/* Column mapping table */}
+      <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-border bg-muted/30">
+          <h4 className="text-sm font-medium">Column Mapping</h4>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Map each column to a roster field, keep as metric, or exclude it
+          </p>
+        </div>
+
+        {/* Sticky header */}
+        <div className="sticky top-0 z-10 bg-background border-b border-border grid grid-cols-[2fr_1fr_2fr_4fr] gap-0 px-4 py-2 text-xs font-medium text-muted-foreground">
+          <span>Your Column</span>
+          <span>Type</span>
+          <span>Maps To</span>
+          <span>Sample Data</span>
+        </div>
+
+        <div className="divide-y divide-border max-h-[60vh] overflow-y-auto">
+          {mappings.map((col, idx) => {
+            const isRoster = col.mapping_type === "roster";
+            const isExcluded = col.mapping_type === "exclude";
+            const confidence = col.confidence;
+
+            return (
+              <div
+                key={idx}
+                className={`grid grid-cols-[2fr_1fr_2fr_4fr] gap-0 px-4 py-2.5 items-center text-sm transition-colors ${
+                  isExcluded ? "bg-gray-50 opacity-60" : isRoster ? "bg-blue-50/30" : ""
+                }`}
               >
-                {m}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
+                {/* Column name + confidence */}
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-xs truncate" title={col.original}>
+                    {col.original}
+                  </span>
+                  {confidence >= 0.8 && isRoster && (
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                  )}
+                </div>
 
-      {/* Data preview table */}
-      {preview.preview.length > 0 && (
-        <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
-          <div className="px-4 py-3 border-b border-border bg-muted/30">
-            <h4 className="text-sm font-medium">
-              Preview ({Math.min(preview.preview.length, 20)} of {preview.valid_rows} rows)
-            </h4>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-muted/20">
-                  {Object.keys(preview.preview[0]).map((col) => (
-                    <th key={col} className="px-3 py-2 text-left text-xs font-medium text-muted-foreground whitespace-nowrap">
-                      {col.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
-                    </th>
+                {/* Type selector */}
+                <div>
+                  <select
+                    value={col.mapping_type}
+                    onChange={(e) => {
+                      const newType = e.target.value as "roster" | "metric" | "exclude";
+                      onUpdateMapping(idx, {
+                        mapping_type: newType,
+                        mapped_to: newType === "roster" ? "" : undefined,
+                      });
+                    }}
+                    className={`text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring ${
+                      isRoster ? "text-blue-700" : isExcluded ? "text-gray-400" : "text-purple-700"
+                    }`}
+                  >
+                    <option value="roster">Roster</option>
+                    <option value="metric">Metric</option>
+                    <option value="exclude">Exclude</option>
+                  </select>
+                </div>
+
+                {/* Maps to */}
+                <div>
+                  {isRoster ? (
+                    <select
+                      value={col.mapped_to || ""}
+                      onChange={(e) => onUpdateMapping(idx, { mapped_to: e.target.value })}
+                      className={`text-xs px-2 py-1 rounded border border-input bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-ring w-full ${
+                        !col.mapped_to ? "text-red-500 border-red-300" : "text-blue-700"
+                      }`}
+                    >
+                      <option value="">-- Select Field --</option>
+                      {rosterFields.map((f) => (
+                        <option
+                          key={f.key}
+                          value={f.key}
+                          disabled={usedRosterKeys.has(f.key) && col.mapped_to !== f.key}
+                        >
+                          {f.label}{f.required ? " *" : ""}
+                          {usedRosterKeys.has(f.key) && col.mapped_to !== f.key ? " (used)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  ) : isExcluded ? (
+                    <span className="text-xs text-gray-400 italic">skipped</span>
+                  ) : (
+                    <span className="text-xs text-purple-600 truncate" title={col.original}>
+                      auto-metric
+                    </span>
+                  )}
+                </div>
+
+                {/* Sample data */}
+                <div className="flex gap-2 overflow-hidden">
+                  {detectResult.sample_data.slice(0, 3).map((row, i) => (
+                    <span
+                      key={i}
+                      className="text-xs text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded truncate max-w-[120px]"
+                      title={row[col.original]}
+                    >
+                      {row[col.original] || "—"}
+                    </span>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
-                {preview.preview.map((row, i) => (
-                  <tr key={i} className="border-t border-border/50 hover:bg-muted/10">
-                    {Object.values(row).map((val, j) => (
-                      <td key={j} className="px-3 py-2 whitespace-nowrap text-xs">
-                        {String(val ?? "-")}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
-      )}
-
-      {/* Unknown type error */}
-      {preview.error && (
-        <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/20">
-          <p className="text-sm text-red-600">{preview.error}</p>
-        </div>
-      )}
+      </div>
 
       {error && (
         <div className="flex items-start gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
@@ -470,35 +591,46 @@ function PreviewPanel({
         </div>
       )}
 
-      {/* Actions */}
-      <div className="flex justify-between">
-        <button
-          onClick={onBack}
-          className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          &larr; Back
-        </button>
-        <button
-          onClick={onImport}
-          disabled={loading || preview.valid_rows === 0 || !!preview.error}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors"
-        >
-          {loading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Upload className="h-4 w-4" />
-          )}
-          Import {preview.valid_rows} Rows
-        </button>
+      {/* Save profile + actions */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onBack}
+            className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            &larr; Back
+          </button>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Save className="h-4 w-4 text-muted-foreground" />
+            <input
+              type="text"
+              value={saveProfileName}
+              onChange={(e) => onSaveProfileNameChange(e.target.value)}
+              placeholder="Save mapping as profile..."
+              className="w-52 border border-input rounded-lg px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground"
+            />
+          </div>
+          <button
+            onClick={onImport}
+            disabled={loading || !hasAgentName}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors"
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            Import {detectResult.total_rows} Rows
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
 
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 // Import Result Panel
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 
 function ImportResultPanel({
   result,
@@ -523,7 +655,7 @@ function ImportResultPanel({
         <StatBadge label="Records Created" value={result.records_created || 0} />
         <StatBadge label="Records Updated" value={result.records_updated || 0} />
         {result.metrics_created ? (
-          <StatBadge label="New Metrics Detected" value={result.metrics_created} />
+          <StatBadge label="New Metrics" value={result.metrics_created} />
         ) : null}
         {result.agents_scored ? (
           <StatBadge label="Agents Scored" value={result.agents_scored} />
@@ -542,15 +674,15 @@ function ImportResultPanel({
       {(result.metrics_created ?? 0) > 0 && (
         <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 max-w-lg mx-auto">
           <p className="text-xs text-blue-700">
-            {result.metrics_created} new metric{result.metrics_created !== 1 ? "s were" : " was"} detected and added to the system.
-            Go to <span className="font-medium">Scorecard Config &rarr; Metrics</span> to set the channel, weight, and direction for each.
+            {result.metrics_created} new metric{result.metrics_created !== 1 ? "s were" : " was"} detected.
+            Go to <span className="font-medium">Scorecard Config &rarr; Metrics</span> to configure them.
           </p>
         </div>
       )}
 
       {result.note && (
         <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 max-w-lg mx-auto">
-          <p className="text-xs text-amber-700 flex items-center gap-1">
+          <p className="text-xs text-amber-700 flex items-center justify-center gap-1">
             <Info className="h-3.5 w-3.5 flex-shrink-0" />
             {result.note}
           </p>
@@ -568,18 +700,9 @@ function ImportResultPanel({
 }
 
 
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
 // Small components
-// ---------------------------------------------------------------------------
-
-function SummaryCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="bg-card rounded-lg border border-border p-3 shadow-sm">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="text-lg font-semibold mt-0.5">{value}</p>
-    </div>
-  );
-}
+// ─────────────────────────────────────────────────────────────────────────────
 
 function StatBadge({ label, value, warn }: { label: string; value: number; warn?: boolean }) {
   return (
